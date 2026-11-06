@@ -16,6 +16,7 @@ final class Playback: ObservableObject {
     private var generation = 0
     private var latestRequest = 0
     private let requestLock = NSLock()
+    private let cancellation=clip_request_create()!
     private var observer: Any?
     private var cachedTimes: [Double] = []
     private var sourceURL: URL?
@@ -43,10 +44,10 @@ final class Playback: ObservableObject {
         t.setEventHandler { [weak self] in self?.pump() }
         t.resume(); timer=t
     }
-    deinit { timer?.cancel(); if let observer { clock.removeTimeObserver(observer) }; if let media { clip_close(media) } }
+    deinit { timer?.cancel(); if let observer { clock.removeTimeObserver(observer) }; if let media { clip_close(media) }; clip_request_free(cancellation) }
     private func nextGeneration() -> Int {
         requestLock.lock(); defer { requestLock.unlock() }
-        latestRequest += 1; return latestRequest
+        latestRequest += 1; clip_request_set(cancellation,Int32(truncatingIfNeeded:latestRequest)); return latestRequest
     }
     private func isCurrent(_ value: Int) -> Bool {
         requestLock.lock(); defer { requestLock.unlock() }
@@ -66,6 +67,7 @@ final class Playback: ObservableObject {
                 let message=String(cString:error)
                 DispatchQueue.main.async { if self.isCurrent(token) { self.error="Could not open video: \(message)"; self.seeking=false; self.details=nil } }; return
             }
+            clip_enable_cache(m)
             self.media=m; self.generation=token; self.cachedTimes=[]
             let info=clip_info(m)
             var codec=info.codec
@@ -86,7 +88,7 @@ final class Playback: ObservableObject {
             guard let self, self.isCurrent(token), let m=self.media else { return }
             self.running=false; self.generation=token
             if let pending=self.pending, let sample=pending.sample { sample.release() }; self.pending=nil
-            let frame=clip_frame(m,target)
+            let frame=clip_frame_cancellable(m,target,self.cancellation,Int32(truncatingIfNeeded:token))
             guard frame.kind == 1, let unmanaged=frame.sample else {
                 DispatchQueue.main.async { if self.isCurrent(token) { self.seeking=false; self.error="Could not decode this frame." } }; return
             }
@@ -110,25 +112,8 @@ final class Playback: ObservableObject {
         if playing { let t=position; seek(t) { self.step(direction) }; return }
         guard let frame else { return }
         if direction > 0 { seek(frame.end + 0.000002); return }
-        // Decode a local window, then choose the predecessor by decoded PTS.
-        pause(); seeking=true
-        let token=nextGeneration(); let current=frame.time
-        queue.async { [weak self] in
-            guard let self, self.isCurrent(token), let m=self.media else { return }
-            self.running=false
-            let start=max(0,current-2)
-            guard clip_seek(m,start) >= 0 else { return }
-            var previous: Double?
-            while self.isCurrent(token) {
-                let s=clip_next(m); if let buffer=s.sample { buffer.release() }
-                if s.kind <= 0 { break }
-                if s.kind == 1 {
-                    if s.time >= current-0.000001 { break }
-                    previous=s.time
-                }
-            }
-            DispatchQueue.main.async { if self.isCurrent(token) { self.seek(previous ?? 0) } }
-        }
+        // The containing frame just before this PTS is the exact predecessor.
+        seek(max(0,frame.time-0.000002))
     }
     func play() {
         guard !seeking, media != nil else { return }

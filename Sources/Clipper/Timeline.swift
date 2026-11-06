@@ -9,7 +9,7 @@ struct Timeline:View {
     @State private var zoom=0.0
     var body:some View {
         VStack(spacing:6) {
-            TimelineSurface(editor:editor,position:playback.position,zoom:pow(2,zoom))
+            TimelineSurface(editor:editor,position:playback.position,zoom:pow(2,zoom),busy:playback.playing || playback.seeking)
             HStack {
                 Button("Fit") { zoom=0 }.controlSize(.mini)
                 Spacer()
@@ -24,6 +24,7 @@ struct TimelineSurface:NSViewRepresentable {
     @ObservedObject var editor:Editor
     var position:Double
     var zoom:Double
+    var busy:Bool
     func makeNSView(context:Context) -> NSScrollView {
         let scroll=NSScrollView()
         scroll.hasHorizontalScroller=true; scroll.hasVerticalScroller=false; scroll.autohidesScrollers=false
@@ -42,6 +43,7 @@ struct TimelineSurface:NSViewRepresentable {
         let center=scroll.contentView.bounds.midX/priorWidth
         view.duration=duration; view.start=editor.inTime; view.end=editor.outTime; view.position=position
         view.enabled = !editor.exporting
+        view.setBusy(busy)
         view.setFrameSize(CGSize(width:width,height:76))
         view.setSource(editor.source)
         if changed {
@@ -69,16 +71,22 @@ final class TimelineCanvas:NSView {
     private let decode=DispatchQueue(label:"clipper.thumbnails",qos:.utility)
     private var media:OpaquePointer?
     private let ci=CIContext(options:[.cacheIntermediates:false])
+    private let cancellation=clip_request_create()!
+    private var busy=false
+    func setBusy(_ value:Bool) {
+        if value && !busy { generation += 1; pending=[]; clip_request_set(cancellation,Int32(generation)) }
+        busy=value
+    }
     func setSource(_ source:URL?) {
         guard source != url else { return }
-        url=source; generation += 1; images=[:]; pending=[]
+        url=source; generation += 1; images=[:]; pending=[]; clip_request_set(cancellation,Int32(generation))
         decode.async { [weak self] in
             guard let self else { return }
             if let media=self.media { clip_close(media) }; self.media=nil
             if let source { var error=[CChar](repeating:0,count:256); self.media=clip_open(source.path,-1,&error,256) }
         }
     }
-    deinit { if let media { clip_close(media) } }
+    deinit { if let media { clip_close(media) }; clip_request_free(cancellation) }
     private func x(_ t:Double)->Double { t/max(duration,0.001)*bounds.width }
     private func time(_ x:Double)->Double { max(0,min(duration-0.000001,x/bounds.width*duration)) }
     override func draw(_ dirtyRect:NSRect) {
@@ -125,11 +133,11 @@ final class TimelineCanvas:NSView {
         NSColor.labelColor.setFill(); let tip=NSBezierPath(); tip.move(to:CGPoint(x:playhead-4,y:18)); tip.line(to:CGPoint(x:playhead+4,y:18)); tip.line(to:CGPoint(x:playhead,y:23)); tip.close(); tip.fill()
     }
     private func fetch(_ time:Double,key:Int) {
-        guard !pending.contains(key), pending.count < 30 else { return }
+        guard !busy, !pending.contains(key), pending.count < 16 else { return }
         pending.insert(key); let token=generation
         decode.async { [weak self] in
             guard let self, let media=self.media else { return }
-            let frame=clip_frame(media,time)
+            let frame=clip_frame_cancellable(media,time,self.cancellation,Int32(token))
             var image:NSImage?
             if let unmanaged=frame.sample {
                 let sample=unmanaged.takeRetainedValue()

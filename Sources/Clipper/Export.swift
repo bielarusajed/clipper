@@ -71,7 +71,8 @@ final class EncoderProcess: @unchecked Sendable {
             errors.fileHandleForReading.readabilityHandler = { h in text.appendError(h.availableData) }
             try lock.withLock {
                 if cancelled { throw ExportFailure.cancelled }
-                try process.run()
+                do { try process.run() }
+                catch { throw ExportFailure.message("Could not start the media engine: \(error.localizedDescription)") }
             }
             process.waitUntilExit()
             output.fileHandleForReading.readabilityHandler=nil

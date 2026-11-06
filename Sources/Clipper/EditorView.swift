@@ -47,7 +47,7 @@ struct EditorView: View {
                 VStack(spacing:2) {
                     Text(editor.source?.lastPathComponent ?? "Clipper").font(.headline).lineLimit(1)
                     if let d=playback.details { Text("\(Int(d.displaySize.width)) × \(Int(d.displaySize.height))  \(d.codec.uppercased())\(d.hdr ? "  HDR" : "")").font(.caption).foregroundStyle(.secondary) }
-                }
+                }.frame(minWidth:240).fixedSize()
             }
         }
         .onChange(of:editor.edit) { old,_ in editor.settingsChanged(old) }

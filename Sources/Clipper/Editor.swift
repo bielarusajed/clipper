@@ -46,6 +46,7 @@ import UniformTypeIdentifiers
             self.playback.seek(max(0,info.duration-0.000001)) {
                 guard self.loadingID==id else { return }
                 self.end=self.playback.frame
+                if let last=self.end, last.end > 0 { self.playback.details?.duration=last.end }
                 self.playback.endTime=self.outTime
                 self.loading=false
                 self.playback.seek(self.inTime)

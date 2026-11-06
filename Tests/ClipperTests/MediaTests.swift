@@ -33,7 +33,7 @@ final class MediaTests:XCTestCase {
         return Double(data[0])
     }
     func details(_ info:ClipInfo)->MediaDetails {
-        MediaDetails(duration:info.duration,origin:info.origin,width:Int(info.width),height:Int(info.height),rotation:info.rotation,pixelAspect:info.pixelAspect,fps:info.fps,hdr:info.hdr != 0,codec:"test",audioLabels:["Audio"],audioStreams:[1])
+        MediaDetails(duration:info.duration,origin:info.origin,width:Int(info.width),height:Int(info.height),rotation:info.rotation,pixelAspect:info.pixelAspect,fps:info.fps,hdr:info.hdr != 0,codec:"test",audioLabels:info.audioCount > 0 ? ["Audio"] : [],audioStreams:info.audioCount > 0 ? [1] : [])
     }
     func testAllInputFormatsDecodeAndSeekToContainingFrame() throws {
         for name in ["cfr.mp4","vfr.mkv","vp9.webm","av1.webm","legacy.avi","offset.mkv"] {
@@ -83,7 +83,8 @@ final class MediaTests:XCTestCase {
         for sdr in [false,true] {
             var edit=EditSettings(); edit.codec = sdr ? .h264 : .hevc; edit.convertToSDR=sdr
             let output=fixture(sdr ? "sdr-output.mp4" : "hdr-output.mp4")
-            try? FileManager.default.removeItem(at:output); defer { try? FileManager.default.removeItem(at:output) }
+            if FileManager.default.fileExists(atPath:output.path) { try FileManager.default.removeItem(at:output) }
+            defer { if FileManager.default.fileExists(atPath:output.path) { try? FileManager.default.removeItem(at:output) } }
             try await EncoderProcess().run(ExportRequest(source:source,details:details(info),edit:edit,start:0,end:1,destination:output)) { _ in }
             let decoded=try open(output); defer { clip_close(decoded) }
             XCTAssertEqual(clip_info(decoded).hdr,sdr ? 0 : 1)
@@ -111,5 +112,39 @@ final class MediaTests:XCTestCase {
         XCTAssertEqual(abs(info.rotation),90,accuracy:0.1)
         XCTAssertEqual(details(info).displaySize.width,90)
         XCTAssertEqual(details(info).displaySize.height,160)
+    }
+    func testCachedFrameSteppingUsesDecodedVFRBoundaries() throws {
+        let url=fixture("vfr.mkv"), all=try frames(url)
+        let m=try open(url); defer { clip_close(m) }; clip_enable_cache(m)
+        var point=clip_frame(m,2.501)
+        if let sample=point.sample { sample.release() }
+        for _ in 0..<15 {
+            let previous=point.time
+            point=clip_frame(m,point.time+point.duration+0.000002)
+            if let sample=point.sample { sample.release() }
+            let expected=all.first(where:{$0.0 > previous+0.000001})!
+            XCTAssertEqual(point.time,expected.0,accuracy:0.000002)
+            let back=clip_frame(m,point.time-0.000002)
+            if let sample=back.sample { sample.release() }
+            XCTAssertEqual(back.time,previous,accuracy:0.000002)
+        }
+    }
+    func testUserSampleCutWhenProvided() async throws {
+        guard let path=ProcessInfo.processInfo.environment["CLIPPER_SAMPLE"] else { throw XCTSkip("Set CLIPPER_SAMPLE to test a real long-GOP 4K source") }
+        let source=URL(fileURLWithPath:path)
+        let m=try open(source); defer { clip_close(m) }; clip_enable_cache(m)
+        let info=clip_info(m)
+        let first=clip_frame(m,493.5), last=clip_frame(m,499.999999)
+        if let sample=first.sample { sample.release() }; if let sample=last.sample { sample.release() }
+        let output=fixture("real-sample-clip.mp4")
+        if FileManager.default.fileExists(atPath:output.path) { try FileManager.default.removeItem(at:output) }
+        var edit=EditSettings(); edit.codec = .h264
+        try await EncoderProcess().run(ExportRequest(source:source,details:details(info),edit:edit,start:first.time,end:last.time+last.duration,destination:output)) { _ in }
+        let result=try frames(output)
+        XCTAssertEqual(result.count,391)
+        XCTAssertEqual(result[0].0,0,accuracy:0.001)
+        let rendered=try open(output); defer { clip_close(rendered) }
+        XCTAssertEqual(clip_info(rendered).width,3840)
+        XCTAssertEqual(clip_info(rendered).height,2160)
     }
 }
