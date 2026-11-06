@@ -7,7 +7,7 @@ struct Viewer:View {
     @State private var wipe=0.5
 
     var body:some View {
-        VStack(spacing:12) {
+        VStack(spacing:EditorWindowLayout.spacing) {
             HStack {
                 Spacer()
                 HStack(spacing:3) {
@@ -25,7 +25,7 @@ struct Viewer:View {
                     }
                 }.padding(3).background(C1.ink.opacity(0.07),in:RoundedRectangle(cornerRadius:8))
                 Spacer()
-            }.disabled(editor.loading || editor.exporting)
+            }.frame(height:EditorWindowLayout.selectorHeight).disabled(editor.loading || editor.exporting)
 
             GeometryReader { geometry in
                 if let details=playback.details {

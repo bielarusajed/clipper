@@ -14,23 +14,6 @@ enum C1 {
     static let playhead = NSColor.controlAccentColor
 }
 
-struct WindowAppearance: NSViewRepresentable {
-    func makeNSView(context:Context) -> NSView { WindowHook() }
-    func updateNSView(_ view:NSView,context:Context) { }
-    private final class WindowHook:NSView {
-        override func viewDidMoveToWindow() {
-            super.viewDidMoveToWindow()
-            window?.appearance=nil
-            window?.titlebarAppearsTransparent=true
-            window?.toolbar=nil
-            window?.isOpaque=false
-            window?.backgroundColor = .clear
-            window?.titleVisibility = .hidden
-            window?.styleMask.insert(.fullSizeContentView)
-        }
-    }
-}
-
 struct C1Group<Content:View>:View {
     @ViewBuilder var content:Content
     var body:some View { VStack(spacing:0) { content } }

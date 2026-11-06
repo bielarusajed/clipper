@@ -7,23 +7,27 @@ struct EditorView:View {
     @State private var dropping=false
     @State private var startText=""
     @State private var endText=""
+    @State private var availableWindowSize=CGSize(width:CGFloat.infinity,height:CGFloat.infinity)
 
     var body:some View {
         Group {
             if editor.source != nil {
-                HStack(spacing:12) {
-                    sidebar.frame(width:288).modifier(GlassPanel(radius:22))
-                    VStack(spacing:12) {
+                HStack(spacing:EditorWindowLayout.spacing) {
+                    sidebar.frame(width:EditorWindowLayout.sidebarWidth).modifier(GlassPanel(radius:22))
+                    VStack(spacing:EditorWindowLayout.spacing) {
                         Viewer(editor:editor,playback:playback).frame(maxWidth:.infinity,maxHeight:.infinity)
                         timelineDeck.modifier(GlassPanel(radius:20))
                     }
-                }.padding(12)
+                }.padding(EditorWindowLayout.inset)
             } else { emptyState }
         }
+        .frame(maxWidth:availableWindowSize.width,maxHeight:availableWindowSize.height)
         .background(WindowMaterial().ignoresSafeArea().allowsHitTesting(false))
         .foregroundStyle(C1.ink)
         .tint(C1.blue)
-        .background(WindowAppearance().frame(width:0,height:0))
+        .background(EditorWindow(source:editor.source,videoSize:windowVideoSize) { size in
+            if availableWindowSize != size { availableWindowSize=size }
+        }.frame(width:0,height:0))
         .background(WindowPasteHandler(editor:editor).frame(width:0,height:0))
         .navigationTitle(editor.source?.lastPathComponent ?? "Clipper")
         .overlay {
@@ -52,6 +56,13 @@ struct EditorView:View {
         .alert("Clipper",isPresented:Binding(get:{editor.error != nil || playback.error != nil},set:{if !$0 {editor.error=nil;playback.error=nil}})) {
             Button("OK") { editor.error=nil; playback.error=nil }
         } message: { Text(editor.error ?? playback.error ?? "") }
+    }
+
+    private var windowVideoSize:CGSize? {
+        guard !editor.loading, let details=playback.details else { return nil }
+        if editor.previewMode == .original { return details.displaySize }
+        let geometry=editor.edit.geometry(for:details)
+        return CGSize(width:geometry.outWidth,height:geometry.outHeight)
     }
 
     private var sidebar:some View {
@@ -278,7 +289,7 @@ struct EditorView:View {
     }
 
     private var timelineDeck:some View {
-        VStack(spacing:9) {
+        VStack(spacing:EditorWindowLayout.timelineSpacing) {
             HStack(spacing:9) {
                 Button { editor.seek(editor.inTime) } label: { Image(systemName:"backward.end.fill") }.help("Go to start")
                 Button { editor.stepFrame(-1) } label: { Image(systemName:"chevron.left") }.help("Previous frame (←)")
@@ -289,10 +300,10 @@ struct EditorView:View {
                 Text(TimeText.format(editor.displayedPosition)).font(.system(size:12,weight:.semibold).monospacedDigit()).foregroundStyle(C1.ink).padding(.leading,3)
                 if playback.seeking { ProgressView().controlSize(.mini) }
                 Spacer()
-            }.buttonStyle(.borderless).font(.system(size:11)).foregroundStyle(C1.secondary).frame(height:27)
-            Timeline(editor:editor,playback:playback).frame(height:144)
+            }.buttonStyle(.borderless).font(.system(size:11)).foregroundStyle(C1.secondary).frame(height:EditorWindowLayout.transportHeight)
+            Timeline(editor:editor,playback:playback).frame(height:EditorWindowLayout.timelineHeight)
 
-        }.padding(.horizontal,18).padding(.top,12).padding(.bottom,12)
+        }.padding(.horizontal,18).padding(.vertical,EditorWindowLayout.timelinePadding)
 
             .disabled(editor.loading || editor.exporting)
     }

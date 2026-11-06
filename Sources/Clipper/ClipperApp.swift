@@ -7,11 +7,10 @@ import AppKit
     var body: some Scene {
         WindowGroup {
             EditorView(editor:editor,playback:editor.playback)
-                .frame(minWidth:1010,minHeight:720)
                 .onAppear { delegate.editor=editor; delegate.deliverPending() }
                 .onOpenURL { editor.open($0) }
         }
-        .defaultSize(width:1180,height:800)
+        .defaultSize(width:EditorWindowLayout.starterSize.width,height:EditorWindowLayout.starterSize.height)
         .windowStyle(.titleBar)
         .commands {
             CommandGroup(replacing:.newItem) {

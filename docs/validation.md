@@ -2,6 +2,12 @@
 
 Validated on the user's Apple M1 Pro running macOS 27.0.1 with Xcode 27.2.
 
+## 0.4.1 adaptive window sizing
+
+The starter uses a 520×440 content area and centers within the current screen's usable bounds on launch and after closing a video. The editor starts at 1180 points wide and derives its height from the displayed video's aspect ratio plus the selector, timeline and spacing. `NSScreen.visibleFrame` supplies the current display's usable bounds, excluding the menu bar and Dock; the title bar is also subtracted. Portrait video narrows the window when it reaches the available height. Display changes refresh the bounds, and full screen suspends automatic frame changes.
+
+Two sizing tests cover landscape and portrait geometry, shorter available screens, native SwiftUI video bounds, the persistent native maximum height, manual resizing from either dimension, and close/reopen sizing. The focused file-paste and comparison-layer tests also pass. The native tests require window-service access outside the filesystem sandbox.
+
 ## 0.3.1 confirmed output replacement
 
 Save As now honors the native replacement confirmation for an existing output. Its validator only rejects the source video. Source protection checks resolved paths and device/inode identity, including symlinks and hard links, both before encoding and at publication. One-click Export still generates a unique name and does not authorize replacement.
