@@ -18,7 +18,7 @@ final class Playback: ObservableObject {
     private let requestLock = NSLock()
     private let cancellation=clip_request_create()!
     private var observer: Any?
-    private var cachedTimes: [Double] = []
+    private var deferredActions: [() -> Void] = []
     private var sourceURL: URL?
     @Published var details: MediaDetails?
     @Published var frame: FramePoint?
@@ -29,7 +29,7 @@ final class Playback: ObservableObject {
     var endTime = Double.infinity
 
     init() {
-        video.videoGravity = .resizeAspect
+        video.videoGravity = .resize
         clock.addRenderer(video)
         clock.addRenderer(audio)
         clock.delaysRateChangeUntilHasSufficientMediaData = false
@@ -53,7 +53,8 @@ final class Playback: ObservableObject {
         requestLock.lock(); defer { requestLock.unlock() }
         return latestRequest == value
     }
-    func open(_ url: URL, audioTrack: Int = 0, at time: Double = 0, completion: (() -> Void)? = nil) {
+    func open(_ url: URL, audioTrack: Int = 0, at time: Double = 0, onFailure: (() -> Void)? = nil, completion: (() -> Void)? = nil) {
+        deferredActions=[]
         pause(); seeking=true; error=nil
         let token=nextGeneration()
         sourceURL=url
@@ -65,10 +66,10 @@ final class Playback: ObservableObject {
             var error=[CChar](repeating:0,count:512)
             guard let m=clip_open(url.path,Int32(audioTrack),&error,512) else {
                 let message=String(cString:error)
-                DispatchQueue.main.async { if self.isCurrent(token) { self.error="Could not open video: \(message)"; self.seeking=false; self.details=nil } }; return
+                DispatchQueue.main.async { if self.isCurrent(token) { self.error="Could not open video: \(message)"; self.seeking=false; self.details=nil; onFailure?() } }; return
             }
             clip_enable_cache(m)
-            self.media=m; self.generation=token; self.cachedTimes=[]
+            self.media=m; self.generation=token
             let info=clip_info(m)
             var codec=info.codec
             let codecText=withUnsafePointer(to:&codec) { $0.withMemoryRebound(to:CChar.self,capacity:64) { String(cString:$0) } }
@@ -76,11 +77,11 @@ final class Playback: ObservableObject {
             DispatchQueue.main.async {
                 guard self.isCurrent(token) else { return }
                 self.details=details
-                self.seek(time,completion:completion)
+                self.seek(time,onFailure:onFailure,completion:completion)
             }
         }
     }
-    func seek(_ requested: Double, completion: (() -> Void)? = nil) {
+    func seek(_ requested: Double, onFailure: (() -> Void)? = nil, completion: (() -> Void)? = nil) {
         pause(); seeking=true
         let token=nextGeneration()
         let target=max(0,min(requested,max(0,(details?.duration ?? requested)-0.000001)))
@@ -90,11 +91,9 @@ final class Playback: ObservableObject {
             if let pending=self.pending, let sample=pending.sample { sample.release() }; self.pending=nil
             let frame=clip_frame_cancellable(m,target,self.cancellation,Int32(truncatingIfNeeded:token))
             guard frame.kind == 1, let unmanaged=frame.sample else {
-                DispatchQueue.main.async { if self.isCurrent(token) { self.seeking=false; self.error="Could not decode this frame." } }; return
+                DispatchQueue.main.async { if self.isCurrent(token) { self.seeking=false; self.deferredActions=[]; self.error="Could not decode this frame."; onFailure?() } }; return
             }
             let sample=unmanaged.takeRetainedValue()
-            self.cachedTimes.append(frame.time)
-            self.cachedTimes=Array(Set(self.cachedTimes)).sorted()
             let point=FramePoint(time:frame.time,duration:frame.duration,pts:frame.pts,timeBaseNum:frame.timeBaseNum,timeBaseDen:frame.timeBaseDen)
             DispatchQueue.main.async {
                 guard self.isCurrent(token) else { return }
@@ -105,24 +104,35 @@ final class Playback: ObservableObject {
                 self.video.enqueue(sample)
                 self.position=frame.time; self.frame=point; self.seeking=false
                 completion?()
+                self.runNextAction()
             }
         }
     }
     func step(_ direction: Int) {
+        if seeking { deferredActions.append { [weak self] in self?.step(direction) }; return }
         if playing { let t=position; seek(t) { self.step(direction) }; return }
         guard let frame else { return }
         if direction > 0 { seek(frame.end + 0.000002); return }
         // The containing frame just before this PTS is the exact predecessor.
         seek(max(0,frame.time-0.000002))
     }
+    func afterPendingSeeks(_ action: @escaping () -> Void) {
+        if seeking || !deferredActions.isEmpty { deferredActions.append(action) } else { action() }
+    }
+    func clearQueuedActions() { deferredActions=[] }
+    private func runNextAction() {
+        guard !seeking, !deferredActions.isEmpty else { return }
+        deferredActions.removeFirst()()
+        if !seeking { runNextAction() }
+    }
     func play() {
         guard !seeking, media != nil else { return }
         let start=position; let token=nextGeneration()
         playing=true
-        video.flushAndRemoveImage(); audio.flush()
-        clock.setRate(0,time:CMTime(seconds:start,preferredTimescale:1000000))
         queue.async { [weak self] in
             guard let self, let m=self.media, self.isCurrent(token) else { return }
+            self.video.flushAndRemoveImage(); self.audio.flush()
+            self.clock.setRate(0,time:CMTime(seconds:start,preferredTimescale:1000000))
             if let p=self.pending, let b=p.sample { b.release() }; self.pending=nil
             if clip_seek(m,start) < 0 { return }
             self.decodeFloor=start; self.generation=token; self.running=true
@@ -131,6 +141,7 @@ final class Playback: ObservableObject {
         }
     }
     func pause() {
+        _=nextGeneration()
         playing=false; clock.setRate(0,time:.invalid)
         queue.async { [weak self] in self?.running=false }
     }
@@ -141,11 +152,12 @@ final class Playback: ObservableObject {
         guard running, isCurrent(generation), let m=media else { return }
         let now=clock.currentTime().seconds
         for _ in 0..<100 {
+            guard isCurrent(generation) else { running=false; return }
             let sample: ClipSample
-            if let p=pending { sample=p; pending=nil } else { sample=clip_next(m) }
+            if let p=pending { sample=p; pending=nil } else { sample=clip_next_cancellable(m,cancellation,Int32(truncatingIfNeeded:generation)) }
             if sample.kind <= 0 {
                 running=false
-                if sample.kind < 0 { DispatchQueue.main.async { self.error="Playback decoding failed."; self.pause() } }
+                if sample.kind == -1 { DispatchQueue.main.async { self.error="Playback decoding failed."; self.pause() } }
                 return
             }
             guard let unmanaged=sample.sample else { continue }

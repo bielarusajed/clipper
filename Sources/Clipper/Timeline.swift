@@ -14,10 +14,10 @@ struct Timeline:View {
                 Button("Fit") { zoom=0 }.controlSize(.mini)
                 Spacer()
                 Image(systemName:"minus.magnifyingglass").foregroundStyle(.secondary)
-                Slider(value:$zoom,in:0...16).frame(width:160).help("Zoom the timeline for precise edits")
+                Slider(value:$zoom,in:0...max(0.01,min(16,log2(max(1,min(8_000_000,(editor.details?.duration ?? 1)*(editor.details?.fps ?? 30)*150)/1000))))).frame(width:160).help("Zoom the timeline for precise edits")
                 Image(systemName:"plus.magnifyingglass").foregroundStyle(.secondary)
             }
-        }
+        }.onChange(of:editor.source) { _,_ in zoom=0 }
     }
 }
 struct TimelineSurface:NSViewRepresentable {
@@ -37,7 +37,7 @@ struct TimelineSurface:NSViewRepresentable {
     func updateNSView(_ scroll:NSScrollView,context:Context) {
         guard let view=scroll.documentView as? TimelineCanvas else { return }
         let duration=editor.details?.duration ?? 1
-        let width=max(100,scroll.contentSize.width)*zoom
+        let width=min(8_000_000,max(100,scroll.contentSize.width)*zoom)
         let changed=abs(view.frame.width-width) > 1
         let priorWidth=max(1,view.frame.width)
         let center=scroll.contentView.bounds.midX/priorWidth
@@ -137,12 +137,16 @@ final class TimelineCanvas:NSView {
         pending.insert(key); let token=generation
         decode.async { [weak self] in
             guard let self, let media=self.media else { return }
-            let frame=clip_frame_cancellable(media,time,self.cancellation,Int32(token))
+            let frame=clip_thumbnail(media,time,self.cancellation,Int32(token))
             var image:NSImage?
             if let unmanaged=frame.sample {
                 let sample=unmanaged.takeRetainedValue()
                 if let pixel=CMSampleBufferGetImageBuffer(sample) {
                     var ci=CIImage(cvPixelBuffer:pixel)
+                    let rotation=clip_info(media).rotation
+                    if abs(rotation)>45 {
+                        ci=ci.oriented(forExifOrientation:rotation>135 || rotation < -135 ? 3 : rotation>0 ? 6 : 8)
+                    }
                     let scale=160/ci.extent.width
                     ci=ci.transformed(by:CGAffineTransform(scaleX:scale,y:scale))
                     if let cg=self.ci.createCGImage(ci,from:ci.extent) { image=NSImage(cgImage:cg,size:.zero) }

@@ -32,7 +32,11 @@ int main(int argc,char **argv) { @autoreleasepool {
     for(int i=0;i<20;i++) { point=clip_frame(m,point.time+point.duration+0.000002); if(point.sample) CFRelease(point.sample); }
     double step=(now()-begin)/20;
     printf("forward_step_mean_ms=%.2f\n",step*1000);
+    begin=now();
+    for(int i=0;i<30;i++) { point=clip_frame(m,point.time-0.000002); if(point.sample) CFRelease(point.sample); }
+    double back=(now()-begin)/30;
+    printf("backward_step_mean_ms=%.2f\n",back*1000);
     clip_close(m);
-    if (maximum>0.6 || frames/elapsed<60) { puts("FAIL: seek >600ms or playback decode <60fps"); return 1; }
+    if (maximum>0.75 || frames/elapsed<60 || step>0.02 || back>0.02) { puts("FAIL: distant seek >750ms, decode <60fps, or cached step >20ms"); return 1; }
     puts("PASS"); return 0;
 }}

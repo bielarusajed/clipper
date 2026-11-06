@@ -32,6 +32,8 @@ int clip_audio_stream(ClipMedia *media, int track);
 int clip_seek(ClipMedia *media, double time);
 void clip_enable_cache(ClipMedia *media);
 ClipSample clip_next(ClipMedia *media);
+ClipSample clip_next_cancellable(ClipMedia *media, ClipRequest *request, int generation);
 // Seeks and decodes the actual frame whose display interval contains time.
 ClipSample clip_frame(ClipMedia *media, double time);
 ClipSample clip_frame_cancellable(ClipMedia *media, double time, ClipRequest *request, int generation);
+ClipSample clip_thumbnail(ClipMedia *media, double time, ClipRequest *request, int generation);

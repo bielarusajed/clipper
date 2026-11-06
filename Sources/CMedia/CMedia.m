@@ -6,11 +6,13 @@
 #include <libavutil/display.h>
 #include <libavutil/imgutils.h>
 #include <libavutil/hwcontext.h>
+#include <libavutil/pixdesc.h>
 #include <libswscale/swscale.h>
 #include <libswresample/swresample.h>
 #include <stdatomic.h>
 
 struct ClipRequest { atomic_int generation; };
+enum { RenderCacheCount=4, RawCacheCount=48 };
 ClipRequest *clip_request_create(void) { ClipRequest *r=calloc(1,sizeof(*r)); atomic_init(&r->generation,0); return r; }
 void clip_request_free(ClipRequest *r) { free(r); }
 void clip_request_set(ClipRequest *r,int generation) { atomic_store(&r->generation,generation); }
@@ -28,12 +30,12 @@ struct ClipMedia {
     int audioStreams[64];
     char audioLabels[64][160];
     double audioFloor;
-    ClipSample cache[12];
-    int confirmed[12], cacheEnabled, cacheSlot;
+    ClipSample cache[RenderCacheCount];
+    int confirmed[RenderCacheCount], cacheEnabled, cacheSlot;
     double lastDecoded;
-    AVFrame *rawCache[12];
-    double rawTime[12], rawDuration[12];
-    int rawConfirmed[12], rawSlot, lastRaw;
+    AVFrame *rawCache[RawCacheCount];
+    double rawTime[RawCacheCount], rawDuration[RawCacheCount];
+    int rawConfirmed[RawCacheCount], rawSlot, lastRaw, rawCapacity;
 };
 
 static void message(char *out, int size, int code) { av_strerror(code, out, size); }
@@ -81,6 +83,11 @@ ClipMedia *clip_open(const char *path, int audioTrack, char *error, int errorSiz
     AVStream *v = m->format->streams[m->vi];
     AVCodecParameters *p = v->codecpar;
     m->info.width = p->width; m->info.height = p->height;
+    // At most 512 MiB of decoded frame references, with a fixed entry cap.
+    const AVPixFmtDescriptor *pixelFormat=av_pix_fmt_desc_get(p->format);
+    int depth=pixelFormat ? pixelFormat->comp[0].depth : p->bits_per_raw_sample;
+    double frameBytes=fmax(1,(double)p->width*p->height*(depth>8 ? 3.0 : 1.5));
+    m->rawCapacity=fmax(4,fmin(RawCacheCount,floor(512.0*1024*1024/frameBytes)));
     m->info.origin = m->format->start_time == AV_NOPTS_VALUE ? 0 : (double)m->format->start_time / AV_TIME_BASE;
     m->info.duration = m->format->duration == AV_NOPTS_VALUE ? 0 : (double)m->format->duration / AV_TIME_BASE;
     if (m->info.duration <= 0 && v->duration != AV_NOPTS_VALUE) m->info.duration = v->duration * av_q2d(v->time_base);
@@ -119,8 +126,8 @@ fail:
 }
 void clip_close(ClipMedia *m) {
     if (!m) return;
-    for (int i=0;i<12;i++) if (m->cache[i].sample) CFRelease(m->cache[i].sample);
-    for (int i=0;i<12;i++) av_frame_free(&m->rawCache[i]);
+    for (int i=0;i<RenderCacheCount;i++) if (m->cache[i].sample) CFRelease(m->cache[i].sample);
+    for (int i=0;i<RawCacheCount;i++) av_frame_free(&m->rawCache[i]);
     avformat_close_input(&m->format);
     avcodec_free_context(&m->video); avcodec_free_context(&m->audio);
     av_frame_free(&m->frame); av_packet_free(&m->packet);
@@ -150,7 +157,7 @@ void clip_enable_cache(ClipMedia *m) { m->cacheEnabled=1; }
 static void cacheFrame(ClipMedia *m, ClipSample s) {
     if (!m->cacheEnabled || s.kind!=1) return;
     int existing=-1;
-    for (int i=0;i<12;i++) {
+    for (int i=0;i<RenderCacheCount;i++) {
         if (!m->cache[i].sample) continue;
         if (fabs(m->cache[i].time-m->lastDecoded)<0.0000001 && s.time > m->lastDecoded) {
             m->cache[i].duration=s.time-m->lastDecoded; m->confirmed[i]=1;
@@ -159,36 +166,39 @@ static void cacheFrame(ClipMedia *m, ClipSample s) {
     }
     m->lastDecoded=s.time;
     if (existing>=0) return;
-    int slot=m->cacheSlot++%12;
+    int slot=m->cacheSlot++%RenderCacheCount;
     if (m->cache[slot].sample) CFRelease(m->cache[slot].sample);
     m->cache[slot]=s; CFRetain(s.sample); m->confirmed[slot]=0;
 }
 
-static CFStringRef primaries(enum AVColorPrimaries p) {
-    return p == AVCOL_PRI_BT2020 ? kCVImageBufferColorPrimaries_ITU_R_2020 : kCVImageBufferColorPrimaries_ITU_R_709_2;
-}
 static ClipSample videoSample(ClipMedia *m, AVFrame *f) {
     CVPixelBufferRef pixel = NULL;
     if (f->format == AV_PIX_FMT_VIDEOTOOLBOX) {
         pixel = (CVPixelBufferRef)f->data[3]; CVPixelBufferRetain(pixel);
     } else {
         BOOL ten = m->info.hdr;
-        OSType format = ten ? kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
+        int full=f->color_range==AVCOL_RANGE_JPEG;
+        OSType format = ten ? (full ? kCVPixelFormatType_420YpCbCr10BiPlanarFullRange : kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange) : (full ? kCVPixelFormatType_420YpCbCr8BiPlanarFullRange : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange);
         NSDictionary *attrs = @{(id)kCVPixelBufferIOSurfacePropertiesKey: @{}};
         if (CVPixelBufferCreate(NULL, f->width, f->height, format, (__bridge CFDictionaryRef)attrs, &pixel) != kCVReturnSuccess) return (ClipSample){.kind=-1};
         CVPixelBufferLockBaseAddress(pixel, 0);
         enum AVPixelFormat dest = ten ? AV_PIX_FMT_P010LE : AV_PIX_FMT_NV12;
         m->sws = sws_getCachedContext(m->sws, f->width, f->height, f->format, f->width, f->height, dest, SWS_BILINEAR, NULL, NULL, NULL);
         if (!m->sws) { CVPixelBufferUnlockBaseAddress(pixel, 0); CVPixelBufferRelease(pixel); return (ClipSample){.kind=-1}; }
+        int matrix=f->colorspace==AVCOL_SPC_UNSPECIFIED ? (f->width>=1280 ? SWS_CS_ITU709 : SWS_CS_ITU601) : f->colorspace;
+        const int *coefficients=sws_getCoefficients(matrix);
+        sws_setColorspaceDetails(m->sws,coefficients,full,coefficients,full,0,1<<16,1<<16);
         uint8_t *data[4] = {0}; int strides[4] = {0};
         for (int n=0;n<2;n++) { data[n] = CVPixelBufferGetBaseAddressOfPlane(pixel,n); strides[n] = (int)CVPixelBufferGetBytesPerRowOfPlane(pixel,n); }
         sws_scale(m->sws, (const uint8_t * const *)f->data, f->linesize, 0, f->height, data, strides);
         CVPixelBufferUnlockBaseAddress(pixel, 0);
     }
-    CVBufferSetAttachment(pixel, kCVImageBufferColorPrimariesKey, primaries(f->color_primaries), kCVAttachmentMode_ShouldPropagate);
-    CFStringRef transfer = f->color_trc == AVCOL_TRC_SMPTE2084 ? kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ : f->color_trc == AVCOL_TRC_ARIB_STD_B67 ? kCVImageBufferTransferFunction_ITU_R_2100_HLG : kCVImageBufferTransferFunction_ITU_R_709_2;
-    CVBufferSetAttachment(pixel, kCVImageBufferTransferFunctionKey, transfer, kCVAttachmentMode_ShouldPropagate);
-    CVBufferSetAttachment(pixel, kCVImageBufferYCbCrMatrixKey, m->info.hdr ? kCVImageBufferYCbCrMatrix_ITU_R_2020 : kCVImageBufferYCbCrMatrix_ITU_R_709_2, kCVAttachmentMode_ShouldPropagate);
+    CFStringRef color=CVColorPrimariesGetStringForIntegerCodePoint(f->color_primaries);
+    CFStringRef transfer=CVTransferFunctionGetStringForIntegerCodePoint(f->color_trc);
+    CFStringRef matrix=CVYCbCrMatrixGetStringForIntegerCodePoint(f->colorspace);
+    CVBufferSetAttachment(pixel,kCVImageBufferColorPrimariesKey,color ?: (f->width>=1280 ? kCVImageBufferColorPrimaries_ITU_R_709_2 : kCVImageBufferColorPrimaries_SMPTE_C),kCVAttachmentMode_ShouldPropagate);
+    CVBufferSetAttachment(pixel,kCVImageBufferTransferFunctionKey,transfer ?: kCVImageBufferTransferFunction_ITU_R_709_2,kCVAttachmentMode_ShouldPropagate);
+    CVBufferSetAttachment(pixel,kCVImageBufferYCbCrMatrixKey,matrix ?: (f->width>=1280 ? kCVImageBufferYCbCrMatrix_ITU_R_709_2 : kCVImageBufferYCbCrMatrix_ITU_R_601_4),kCVAttachmentMode_ShouldPropagate);
     AVStream *s = m->format->streams[m->vi];
     int64_t pts = f->best_effort_timestamp;
     if (pts == AV_NOPTS_VALUE) { CVPixelBufferRelease(pixel); return (ClipSample){.kind=-1}; }
@@ -234,7 +244,7 @@ static void cacheRawFrame(ClipMedia *m) {
     if (f->best_effort_timestamp==AV_NOPTS_VALUE) return;
     double t=f->best_effort_timestamp*av_q2d(m->format->streams[m->vi]->time_base)-m->info.origin;
     if (m->lastRaw>=0 && t>m->rawTime[m->lastRaw]) { m->rawDuration[m->lastRaw]=t-m->rawTime[m->lastRaw]; m->rawConfirmed[m->lastRaw]=1; }
-    int slot=m->rawSlot++%12;
+    int slot=m->rawSlot++%m->rawCapacity;
     av_frame_free(&m->rawCache[slot]); m->rawCache[slot]=av_frame_clone(f);
     m->rawTime[slot]=t; m->rawConfirmed[slot]=0; m->lastRaw=slot;
 }
@@ -269,24 +279,30 @@ static int decodeFrame(ClipMedia *m) {
         av_packet_unref(m->packet);
     }
 }
-ClipSample clip_next(ClipMedia *m) {
+ClipSample clip_next_cancellable(ClipMedia *m, ClipRequest *request,int generation) {
     for (;;) {
+        if (request && atomic_load(&request->generation)!=generation) { m->lastDecoded=NAN; return (ClipSample){.kind=-3}; }
         int kind=decodeFrame(m);
         if (kind<=0) return (ClipSample){.kind=kind};
+        if (kind==1) {
+            double t=m->frame->best_effort_timestamp*av_q2d(m->format->streams[m->vi]->time_base)-m->info.origin;
+            if (t<m->audioFloor-0.000001) continue;
+        }
         ClipSample sample=kind==1 ? videoSample(m,m->frame) : audioSample(m,m->frame);
         cacheFrame(m,sample);
         if (sample.kind!=-2) return sample;
     }
 }
+ClipSample clip_next(ClipMedia *m) { return clip_next_cancellable(m,NULL,0); }
 ClipSample clip_frame_cancellable(ClipMedia *m, double time, ClipRequest *request, int generation) {
     ClipSample previous = {0};
-    for (int i=0;i<12;i++) {
+    for (int i=0;i<RenderCacheCount;i++) {
         ClipSample s=m->cache[i];
         if (!s.sample) continue;
         if (m->confirmed[i] && time>=s.time-0.0000001 && time<s.time+s.duration-0.0000001) { CFRetain(s.sample); return s; }
         if (fabs(s.time-m->lastDecoded)<0.0000001 && time>=s.time && time<s.time+0.25) previous=s;
     }
-    for (int i=0;i<12;i++) {
+    for (int i=0;i<m->rawCapacity;i++) {
         if (m->rawCache[i] && m->rawConfirmed[i] && time>=m->rawTime[i]-0.0000001 && time<m->rawTime[i]+m->rawDuration[i]-0.0000001) {
             ClipSample sample=videoSample(m,m->rawCache[i]); sample.duration=m->rawDuration[i]; return sample;
         }
@@ -295,7 +311,7 @@ ClipSample clip_frame_cancellable(ClipMedia *m, double time, ClipRequest *reques
     else if (clip_seek(m,fmax(0,time)) < 0) return (ClipSample){.kind=-1};
     AVFrame *raw=av_frame_alloc();
     for (;;) {
-        if (request && atomic_load(&request->generation)!=generation) { if (previous.sample) CFRelease(previous.sample); av_frame_free(&raw); return (ClipSample){.kind=-3}; }
+        if (request && atomic_load(&request->generation)!=generation) { m->lastDecoded=NAN; if (previous.sample) CFRelease(previous.sample); av_frame_free(&raw); return (ClipSample){.kind=-3}; }
         int kind=decodeFrame(m);
         if (kind<=0) {
             if (raw->buf[0]) { if (previous.sample) CFRelease(previous.sample); previous=videoSample(m,raw); cacheFrame(m,previous); }
@@ -316,3 +332,8 @@ ClipSample clip_frame_cancellable(ClipMedia *m, double time, ClipRequest *reques
     }
 }
 ClipSample clip_frame(ClipMedia *m, double time) { return clip_frame_cancellable(m,time,NULL,0); }
+ClipSample clip_thumbnail(ClipMedia *m,double time,ClipRequest *request,int generation) {
+    if (clip_seek(m,time)<0) return (ClipSample){.kind=-1};
+    m->audioFloor=-INFINITY;
+    for (;;) { ClipSample s=clip_next_cancellable(m,request,generation); if (s.kind!=2) return s; if(s.sample) CFRelease(s.sample); }
+}

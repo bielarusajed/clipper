@@ -20,6 +20,8 @@ fi
 # The package script copies these self-built libraries into the app.
 export PKG_CONFIG_PATH="$ROOT/.build/media/lib/pkgconfig"
 cd ".build/vendor/ffmpeg-$VERSION"
+# FFmpeg does not relink existing dylibs when only configure link paths change.
+if [[ -f ffbuild/config.mak ]]; then make clean > "$ROOT/.build/media-clean.log" 2>&1; fi
 ./configure --prefix="$ROOT/.build/media" --cc="$(xcrun --find clang)" \
   --pkg-config="$ROOT/scripts/media-pkg-config.sh" \
   --disable-gpl --disable-nonfree --disable-version3 --disable-autodetect \

@@ -1,7 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
+if [[ -n "$(git status --porcelain)" ]]; then echo 'Commit the working tree before packaging matching sources.' >&2; exit 1; fi
 bash scripts/build-app.sh
+if [[ -d dist/Clipper-Sources ]]; then mv dist/Clipper-Sources ".build/previous-sources-$(uuidgen)"; fi
 mkdir -p dist/Clipper-Sources/Dependencies dist/Clipper-Sources/Recipes
 cp .build/vendor/ffmpeg-8.0.1.tar.xz .build/vendor/dav1d-1.5.4.tar.gz .build/vendor/zimg-3.0.6.tar.gz dist/Clipper-Sources/Dependencies/
 cp .build/media/config.mak .build/media-configure.log dist/Clipper-Sources/Recipes/

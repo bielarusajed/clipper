@@ -1,5 +1,5 @@
 #!/bin/sh
-# Small, explicit adapter for the two pinned build-time Homebrew dependencies.
+# Explicit metadata for the two pinned libraries built inside this project.
 case "$*" in --version) echo 1.9.5; exit 0 ;; esac
 prefix="$(cd "$(dirname "$0")/.." && pwd)/.build/media"
 case "$*" in

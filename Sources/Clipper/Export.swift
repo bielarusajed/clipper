@@ -25,7 +25,10 @@ struct ExportRequest {
             filters += ["zscale=t=linear:npl=100","format=gbrpf32le","tonemap=tonemap=hable:desat=0","zscale=p=bt709:t=bt709:m=bt709:r=tv","format=yuv420p"]
         }
         // FFmpeg autorotates before the filter graph. Square pixels before crop.
-        if abs(details.pixelAspect-1) > 0.001 { filters += ["scale=trunc(iw*sar/2)*2:ih","setsar=1"] }
+        if abs(details.pixelAspect-1) > 0.001 {
+            let size=details.displaySize
+            filters += ["scale=\(Int(size.width/2)*2):\(Int(size.height/2)*2)","setsar=1"]
+        }
         filters += ["crop=\(g.width):\(g.height):\(g.x):\(g.y)","scale=\(g.outWidth):\(g.outHeight):flags=lanczos","setsar=1"]
         args += ["-vf",filters.joined(separator:","),"-c:v",edit.codec.encoder,"-allow_sw","0","-realtime","0","-q:v",String(Int(edit.quality)),"-pix_fmt",keepHDR ? "p010le" : "nv12","-fps_mode","passthrough"]
         if edit.codec == .hevc { args += ["-tag:v","hvc1","-profile:v",keepHDR ? "main10" : "main"] }

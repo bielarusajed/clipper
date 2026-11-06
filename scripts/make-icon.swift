@@ -1,6 +1,7 @@
 import AppKit
 let root=URL(fileURLWithPath:FileManager.default.currentDirectoryPath)
 let folder=root.appendingPathComponent(".build/Clipper.iconset")
+if FileManager.default.fileExists(atPath:folder.path) { try FileManager.default.removeItem(at:folder) }
 try FileManager.default.createDirectory(at:folder,withIntermediateDirectories:true)
 for base in [16,32,128,256,512] {
   for scale in [1,2] {

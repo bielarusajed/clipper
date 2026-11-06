@@ -22,12 +22,12 @@ import AppKit
                 Button("Export Clip As…") { editor.export(saveAs:true) }.keyboardShortcut("e",modifiers:[.command,.shift]).disabled(!editor.canExport)
             }
             CommandMenu("Playback") {
-                Button("Play / Pause") { editor.togglePlayback() }.keyboardShortcut(.space,modifiers:[])
-                Button("Previous Frame") { editor.returnToOriginal(); editor.playback.step(-1) }.keyboardShortcut(.leftArrow,modifiers:[])
-                Button("Next Frame") { editor.returnToOriginal(); editor.playback.step(1) }.keyboardShortcut(.rightArrow,modifiers:[])
+                Button("Play / Pause") { editor.togglePlayback() }.disabled(editor.loading)
+                Button("Previous Frame") { editor.returnToOriginal(); editor.playback.step(-1) }.disabled(editor.loading)
+                Button("Next Frame") { editor.returnToOriginal(); editor.playback.step(1) }.disabled(editor.loading)
                 Divider()
-                Button("Set Start Here") { editor.markStart() }.keyboardShortcut("i",modifiers:[]).disabled(editor.exporting)
-                Button("Set End Here") { editor.markEnd() }.keyboardShortcut("o",modifiers:[]).disabled(editor.exporting)
+                Button("Set Start Here") { editor.markStart() }.disabled(editor.exporting || editor.loading)
+                Button("Set End Here") { editor.markEnd() }.disabled(editor.exporting || editor.loading)
             }
         }
     }
@@ -35,7 +35,25 @@ import AppKit
 @MainActor final class AppDelegate: NSObject, NSApplicationDelegate {
     weak var editor: Editor?
     var pending: [URL]=[]
-    func applicationDidFinishLaunching(_ notification: Notification) { NSApp.setActivationPolicy(.regular); NSApp.activate(ignoringOtherApps:true) }
+    private var keyMonitor: Any?
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.regular); NSApp.activate(ignoringOtherApps:true)
+        keyMonitor=NSEvent.addLocalMonitorForEvents(matching:.keyDown) { [weak self] event in
+            guard let editor=self?.editor, !editor.loading, !editor.exporting, editor.details != nil,
+                  !(NSApp.keyWindow?.firstResponder is NSTextView),
+                  event.modifierFlags.intersection([.command,.control,.option]).isEmpty else { return event }
+            switch event.keyCode {
+            case 123: editor.returnToOriginal(); editor.playback.step(-1)
+            case 124: editor.returnToOriginal(); editor.playback.step(1)
+            case 49: editor.togglePlayback()
+            default:
+                if event.charactersIgnoringModifiers?.lowercased() == "i" { editor.markStart() }
+                else if event.charactersIgnoringModifiers?.lowercased() == "o" { editor.markEnd() }
+                else { return event }
+            }
+            return nil
+        }
+    }
     func application(_ application:NSApplication,open urls:[URL]) {
         guard let url=urls.first else { return }
         if let editor { editor.open(url) } else { pending=urls }
@@ -46,7 +64,8 @@ import AppKit
         if editor?.exporting == true {
             let alert=NSAlert(); alert.messageText="Cancel the export and quit?"; alert.addButton(withTitle:"Keep Exporting"); alert.addButton(withTitle:"Cancel and Quit")
             if alert.runModal() == .alertFirstButtonReturn { return .terminateCancel }
-            editor?.cancel()
+            editor?.cancelAndQuit()
+            return .terminateLater
         }
         editor?.invalidatePreview(); return .terminateNow
     }

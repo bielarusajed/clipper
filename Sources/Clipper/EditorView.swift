@@ -30,7 +30,7 @@ struct EditorView: View {
                         Text("\(TimeText.format(editor.clipDuration)) selected").monospacedDigit().foregroundStyle(.secondary)
                     }.controlSize(.small)
                     Timeline(editor:editor,playback:playback).frame(height:110)
-                }.padding(16).disabled(editor.exporting)
+                }.padding(16).disabled(editor.exporting || editor.loading)
             } else { empty }
             Divider()
             footer
@@ -78,13 +78,13 @@ struct EditorView: View {
             else if editor.previewURL != nil {
                 Picker("Preview",selection:Binding(get:{editor.showOutput},set:editor.switchPreview)) { Text("Original").tag(false); Text("Output").tag(true) }.pickerStyle(.segmented).frame(width:150)
             } else { Text("Frame preview").font(.caption).foregroundStyle(.secondary).frame(width:124,alignment:.trailing) }
-        }.buttonStyle(.borderless).padding(.horizontal,18).frame(height:48)
+        }.buttonStyle(.borderless).padding(.horizontal,18).frame(height:48).disabled(editor.loading)
     }
     private func timeField(_ title:String,text:Binding<String>,value:Double,commit:@escaping (Double?)->Void) -> some View {
         HStack(spacing:8) {
             Text(title).foregroundStyle(.secondary)
             TextField(title,text:text).font(.system(.body,design:.monospaced)).frame(width:125)
-                .onSubmit { if let time=TimeText.parse(text.wrappedValue) { commit(time) } else { text.wrappedValue=TimeText.format(value); editor.error="Enter seconds or a time such as 00:01:23.450." } }
+                .onSubmit { if text.wrappedValue == TimeText.format(value) { return }; if let time=TimeText.parse(text.wrappedValue) { commit(time) } else { text.wrappedValue=TimeText.format(value); editor.error="Enter seconds or a time such as 00:01:23.450." } }
         }
     }
     private func inspector(_ details:MediaDetails) -> some View {
@@ -126,7 +126,7 @@ struct EditorView: View {
                 Button { editor.preview() } label: { Label("Preview 5 Seconds",systemImage:"play.rectangle") }.disabled(!editor.canExport).frame(maxWidth:.infinity)
                 Text("Render a sample with these settings to check the quality.").font(.caption).foregroundStyle(.secondary)
             }.padding(20)
-        }.disabled(editor.exporting)
+        }.disabled(editor.exporting || editor.loading)
     }
     private var footer: some View {
         HStack(spacing:12) {

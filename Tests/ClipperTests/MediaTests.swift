@@ -129,6 +129,17 @@ final class MediaTests:XCTestCase {
             XCTAssertEqual(back.time,previous,accuracy:0.000002)
         }
     }
+    @MainActor func testRapidStepsAndMarkWaitForTheRequestedFrame() async throws {
+        let editor=Editor()
+        editor.open(fixture("cfr.mp4"))
+        for _ in 0..<250 where editor.loading || editor.playback.seeking { try await Task.sleep(nanoseconds:20_000_000) }
+        XCTAssertFalse(editor.loading)
+        editor.seek(2)
+        editor.playback.step(1); editor.playback.step(1); editor.playback.step(1)
+        editor.markStart()
+        await withCheckedContinuation { continuation in editor.playback.afterPendingSeeks { continuation.resume() } }
+        XCTAssertEqual(editor.start?.time ?? -1,2.125,accuracy:0.000002)
+    }
     func testUserSampleCutWhenProvided() async throws {
         guard let path=ProcessInfo.processInfo.environment["CLIPPER_SAMPLE"] else { throw XCTSkip("Set CLIPPER_SAMPLE to test a real long-GOP 4K source") }
         let source=URL(fileURLWithPath:path)

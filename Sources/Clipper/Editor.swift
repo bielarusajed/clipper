@@ -22,12 +22,13 @@ import UniformTypeIdentifiers
     private var encoder: EncoderProcess?
     private var revision=UUID()
     private var loadingID=UUID()
-    private var loading=false
+    @Published private(set) var loading=false
+    private var quitAfterExport=false
     var details: MediaDetails? { playback.details }
     var inTime: Double { start?.time ?? 0 }
     var outTime: Double { min(end?.end ?? details?.duration ?? 0,details?.duration ?? 0) }
     var clipDuration: Double { max(0,outTime-inTime) }
-    var canExport: Bool { source != nil && start != nil && end != nil && clipDuration > 0 && !playback.seeking && !exporting }
+    var canExport: Bool { source != nil && start != nil && end != nil && clipDuration > 0 && !loading && !playback.seeking && !exporting }
 
     func openPanel() {
         let panel=NSOpenPanel()
@@ -39,11 +40,15 @@ import UniformTypeIdentifiers
         guard !exporting else { error="Finish or cancel the current export before opening another video."; return }
         let id=UUID(); loadingID=id; loading=true
         invalidatePreview(); source=url; start=nil; end=nil; edit=EditSettings(); error=nil; lastExport=nil
-        playback.open(url) { [weak self] in
+        playback.open(url,onFailure:{ [weak self] in self?.loading=false }) { [weak self] in
             guard let self, self.loadingID==id, let info=self.details else { return }
             if info.hdr { self.edit.codec = .hevc }
             self.start=self.playback.frame
-            self.playback.seek(max(0,info.duration-0.000001)) {
+            self.playback.seek(max(0,info.duration-0.000001),onFailure:{
+                self.loading=false
+                self.end=FramePoint(time:info.duration,duration:0,pts:0,timeBaseNum:1,timeBaseDen:1000000)
+                self.playback.seek(self.inTime)
+            }) {
                 guard self.loadingID==id else { return }
                 self.end=self.playback.frame
                 if let last=self.end, last.end > 0 { self.playback.details?.duration=last.end }
@@ -53,20 +58,22 @@ import UniformTypeIdentifiers
             }
         }
     }
-    func seek(_ time: Double) { returnToOriginal(); playback.seek(time) }
+    func seek(_ time: Double) { guard !loading else { return }; returnToOriginal(); playback.clearQueuedActions(); playback.seek(time) }
     func markStart(_ time: Double? = nil) {
-        guard !exporting else { return }
+        guard !exporting, !loading else { return }
+        if time == nil && playback.seeking { playback.afterPendingSeeks { [weak self] in self?.markStart() }; return }
         invalidatePreview()
-        playback.seek(time ?? playback.position) { [weak self] in
+        playback.seek((time ?? playback.position)+(time == nil ? 0 : 0.0005)) { [weak self] in
             guard let self, let frame=self.playback.frame else { return }
             if frame.time < self.outTime { self.start=frame }
             else { self.error="The start must be before the end of the clip." }
         }
     }
     func markEnd(_ time: Double? = nil) {
-        guard !exporting else { return }
+        guard !exporting, !loading else { return }
+        if time == nil && playback.seeking { playback.afterPendingSeeks { [weak self] in self?.markEnd() }; return }
         invalidatePreview()
-        playback.seek(time ?? playback.position) { [weak self] in
+        playback.seek((time ?? playback.position)+(time == nil ? 0 : 0.0005)) { [weak self] in
             guard let self, let frame=self.playback.frame else { return }
             if frame.end > self.inTime { self.end=frame; self.playback.endTime=self.outTime }
             else { self.error="The end must be after the start of the clip." }
@@ -84,7 +91,8 @@ import UniformTypeIdentifiers
         if details?.hdr == true && !edit.convertToSDR { edit.codec = .hevc }
         if edit.audioTrack != previous.audioTrack, let source {
             let t=playback.position
-            playback.open(source,audioTrack:edit.audioTrack,at:t)
+            let duration=details?.duration
+            playback.open(source,audioTrack:edit.audioTrack,at:t) { [weak self] in if let duration { self?.playback.details?.duration=duration } }
         }
         playback.setMuted(edit.muted)
     }
@@ -95,6 +103,7 @@ import UniformTypeIdentifiers
     }
     func returnToOriginal() { if showOutput { outputPlayer.pause(); showOutput=false } }
     func togglePlayback() {
+        guard !loading else { return }
         if showOutput {
             if outputPlayer.rate > 0 { outputPlayer.pause() }
             else {
@@ -153,7 +162,10 @@ import UniformTypeIdentifiers
         let request=ExportRequest(source:source,details:details,edit:edit,start:start,end:end,destination:temporary)
         exporting=true; progress=0; error=nil; jobLabel=isPreview ? "Rendering preview" : "Exporting clip"
         Task {
-            defer { exporting=false; encoder=nil; try? FileManager.default.removeItem(at:temporary) }
+            defer {
+                exporting=false; encoder=nil; try? FileManager.default.removeItem(at:temporary)
+                if quitAfterExport { invalidatePreview(); NSApp.reply(toApplicationShouldTerminate:true) }
+            }
             do {
                 try await job.run(request) { value in Task { @MainActor in self.progress=value } }
                 if isPreview && token != revision { return }
@@ -167,5 +179,6 @@ import UniformTypeIdentifiers
         }
     }
     func cancel() { encoder?.cancel() }
+    func cancelAndQuit() { quitAfterExport=true; encoder?.cancel() }
     func revealExport() { if let lastExport { NSWorkspace.shared.activateFileViewerSelecting([lastExport]) } }
 }
