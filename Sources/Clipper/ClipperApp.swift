@@ -40,6 +40,7 @@ import AppKit
         NSApp.setActivationPolicy(.regular); NSApp.activate(ignoringOtherApps:true)
         keyMonitor=NSEvent.addLocalMonitorForEvents(matching:.keyDown) { [weak self] event in
             guard let editor=self?.editor, !editor.loading, !editor.exporting, editor.details != nil,
+                  !(NSApp.keyWindow is NSPanel),
                   !(NSApp.keyWindow?.firstResponder is NSTextView),
                   event.modifierFlags.intersection([.command,.control,.option]).isEmpty else { return event }
             switch event.keyCode {

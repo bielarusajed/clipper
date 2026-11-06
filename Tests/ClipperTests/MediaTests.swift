@@ -140,6 +140,18 @@ final class MediaTests:XCTestCase {
         await withCheckedContinuation { continuation in editor.playback.afterPendingSeeks { continuation.resume() } }
         XCTAssertEqual(editor.start?.time ?? -1,2.125,accuracy:0.000002)
     }
+    @MainActor func testSwitchingToOutputDoesNotStrandAnActiveSeek() async throws {
+        let editor=Editor()
+        editor.open(fixture("cfr.mp4"))
+        for _ in 0..<250 where editor.loading || editor.playback.seeking { try await Task.sleep(nanoseconds:20_000_000) }
+        editor.seek(2)
+        editor.switchPreview(true)
+        let settled=expectation(description:"The pending source seek finishes while output is visible")
+        editor.playback.afterPendingSeeks { settled.fulfill() }
+        await fulfillment(of:[settled],timeout:2)
+        XCTAssertFalse(editor.playback.seeking)
+        XCTAssertTrue(editor.canExport)
+    }
     func testUserSampleCutWhenProvided() async throws {
         guard let path=ProcessInfo.processInfo.environment["CLIPPER_SAMPLE"] else { throw XCTSkip("Set CLIPPER_SAMPLE to test a real long-GOP 4K source") }
         let source=URL(fileURLWithPath:path)

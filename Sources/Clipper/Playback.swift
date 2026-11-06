@@ -141,7 +141,7 @@ final class Playback: ObservableObject {
         }
     }
     func pause() {
-        _=nextGeneration()
+        if playing { _=nextGeneration() }
         playing=false; clock.setRate(0,time:.invalid)
         queue.async { [weak self] in self?.running=false }
     }
