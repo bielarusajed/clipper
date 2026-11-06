@@ -31,6 +31,8 @@ const char *clip_audio_label(ClipMedia *media, int track);
 int clip_audio_stream(ClipMedia *media, int track);
 int clip_seek(ClipMedia *media, double time);
 void clip_enable_cache(ClipMedia *media);
+// Prepare cached A/V for playback if a complete current decode segment covers start.
+int clip_resume(ClipMedia *media, double start);
 ClipSample clip_next(ClipMedia *media);
 ClipSample clip_next_cancellable(ClipMedia *media, ClipRequest *request, int generation);
 // Seeks and decodes the actual frame whose display interval contains time.

@@ -6,7 +6,6 @@ struct Viewer:View {
     @ObservedObject var playback:Playback
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @State private var wipe=0.5
-    @State private var initialWipe:Double?
 
     var body:some View {
         VStack(spacing:10) {
@@ -23,7 +22,7 @@ struct Viewer:View {
                             .disabled(mode != .original && !editor.previewReady)
                             .accessibilityAddTraits(editor.previewMode == mode ? .isSelected : [])
                             .accessibilityHint(mode != .original && !editor.previewReady ? "Render a five-second preview to enable this view" : "")
-                            .help(mode == .original ? "Edit the original video" : "Render a preview, then inspect the \(mode.rawValue.lowercased()) view")
+                            .help(mode == .original ? "Edit the original video" : editor.previewReady ? "Inspect the \(mode.rawValue.lowercased()) view" : "Render a five-second preview to enable this view")
                     }
                 }.padding(3).background(C1.ink.opacity(0.07),in:RoundedRectangle(cornerRadius:8))
                 Spacer()
@@ -36,7 +35,7 @@ struct Viewer:View {
                     let scale=min(geometry.size.width/size.width,geometry.size.height/size.height)
                     let display=CGSize(width:max(1,size.width*scale),height:max(1,size.height*scale))
                     ZStack {
-                        ComparisonSurface(source:playback.video,player:editor.outputPlayer,details:details,edit:editor.edit,mode:editor.previewMode,wipe:wipe)
+                        ComparisonSurface(source:playback.video,player:editor.outputPlayer,details:details,edit:editor.edit,mode:editor.previewMode,wipe:wipe,onWipe:{ wipe=$0 })
                         if editor.previewMode == .original, editor.edit.cropPreset != .original {
                             CropOverlay(crop:$editor.edit.crop).disabled(editor.exporting || editor.loading)
                         }
@@ -46,26 +45,19 @@ struct Viewer:View {
                                 Spacer()
                                 imageTag("Output · \(editor.edit.codec.rawValue)")
                             }.padding(9).frame(maxHeight:.infinity,alignment:.bottom).allowsHitTesting(false)
-                            wipeHandle(height:display.height,width:display.width)
-                                .position(x:display.width*wipe,y:display.height/2)
                         }
                     }
                     .frame(width:display.width,height:display.height)
                     .clipShape(RoundedRectangle(cornerRadius:8))
                     .overlay(RoundedRectangle(cornerRadius:8).stroke(.white.opacity(0.65),lineWidth:0.5))
-                    .shadow(color:C1.ink.opacity(0.18),radius:15,y:9)
+                    .background(RoundedRectangle(cornerRadius:8).fill(C1.canvas).shadow(color:C1.ink.opacity(0.18),radius:15,y:9).allowsHitTesting(false))
                     .position(x:geometry.size.width/2,y:geometry.size.height/2)
                 } else {
                     Text(editor.loading ? "Preparing the video…" : "Choose another video to continue.")
                         .font(.callout).foregroundStyle(C1.secondary).frame(maxWidth:.infinity,maxHeight:.infinity)
                 }
             }
-            HStack(spacing:5) {
-                Spacer()
-                if editor.comparisonPreparing { ProgressView().controlSize(.mini); Text("Matching source frame…") }
-                else if editor.previewReady { Circle().fill(Color.green.opacity(0.6)).frame(width:4,height:4); Text("\(editor.previewDuration.formatted(.number.precision(.fractionLength(0...2)))) s encoded preview ready") }
-                else { Text("Render a five-second preview to compare quality") }
-            }.font(.system(size:9)).foregroundStyle(C1.secondary).frame(height:13)
+
         }
         .padding(.horizontal,24).padding(.top,12).padding(.bottom,13)
         .background {
@@ -77,7 +69,7 @@ struct Viewer:View {
                             .frame(width:geometry.size.width,height:geometry.size.height)
                             .blur(radius:35).opacity(0.15)
                     }
-                }.clipped()
+                }.clipped().contentShape(Rectangle()).allowsHitTesting(false)
             }
         }
     }
@@ -85,23 +77,7 @@ struct Viewer:View {
         Text(text).font(.system(size:9,weight:.medium)).foregroundStyle(.white)
             .padding(.horizontal,7).padding(.vertical,4).background(.black.opacity(0.48),in:RoundedRectangle(cornerRadius:4))
     }
-    private func wipeHandle(height:Double,width:Double)->some View {
-        ZStack {
-            Color.white.frame(width:1.5,height:height).shadow(color:.black.opacity(0.3),radius:1)
-            Image(systemName:"arrow.left.and.right").font(.system(size:11,weight:.medium)).foregroundStyle(C1.secondary)
-                .frame(width:28,height:28).background(.white.opacity(0.95),in:Circle()).shadow(color:.black.opacity(0.2),radius:4,y:2)
-        }
-        .frame(width:29,height:height).contentShape(Rectangle())
-        .gesture(DragGesture(minimumDistance:0).onChanged { value in
-            if initialWipe == nil { initialWipe=wipe }
-            wipe=max(0.02,min(0.98,(initialWipe ?? wipe)+value.translation.width/width))
-        }.onEnded { _ in initialWipe=nil })
-        .focusable(false).accessibilityLabel("Comparison divider")
-        .accessibilityValue("\(Int(wipe*100)) percent original")
-        .accessibilityAdjustableAction { direction in
-            switch direction { case .increment: wipe=min(0.98,wipe+0.05); case .decrement: wipe=max(0.02,wipe-0.05); @unknown default: break }
-        }
-    }
+
 }
 
 /// Both video layers keep one owner across all display modes. Only their layout
@@ -113,9 +89,13 @@ struct ComparisonSurface:NSViewRepresentable {
     let edit:EditSettings
     let mode:PreviewMode
     let wipe:Double
+    var onWipe:((Double)->Void)?
     func makeNSView(context:Context)->Surface { Surface(source:source,player:player) }
     func updateNSView(_ view:Surface,context:Context) {
-        view.details=details; view.edit=edit; view.mode=mode; view.wipe=wipe; view.needsLayout=true
+        view.details=details; view.edit=edit; view.mode=mode; view.onWipe=onWipe
+        if !view.draggingWipe { view.wipe=wipe }
+        view.needsLayout=true
+        view.window?.invalidateCursorRects(for:view)
     }
     static func dismantleNSView(_ view:Surface,coordinator:()) {
         if view.source.superlayer === view.sourceViewport { view.source.removeFromSuperlayer() }
@@ -126,6 +106,10 @@ struct ComparisonSurface:NSViewRepresentable {
         let sourceViewport=CALayer()
         let output:AVPlayerLayer
         let wipeMask=CALayer()
+        let divider=CALayer()
+        let knob=CATextLayer()
+        var onWipe:((Double)->Void)?
+        private(set) var draggingWipe=false
         var details:MediaDetails?
         var edit=EditSettings()
         var mode=PreviewMode.original
@@ -138,8 +122,48 @@ struct ComparisonSurface:NSViewRepresentable {
             sourceViewport.addSublayer(source); layer?.addSublayer(sourceViewport)
             output.videoGravity = .resize; layer?.addSublayer(output)
             wipeMask.backgroundColor=NSColor.white.cgColor
+            divider.backgroundColor=NSColor.white.cgColor
+            layer?.addSublayer(divider)
+            knob.string="↔"; knob.fontSize=17; knob.alignmentMode = .center
+            knob.foregroundColor=NSColor.darkGray.cgColor; knob.backgroundColor=NSColor.white.cgColor
+            knob.cornerRadius=14; knob.contentsScale=NSScreen.main?.backingScaleFactor ?? 2
+            layer?.addSublayer(knob)
+            setAccessibilityElement(true)
+            setAccessibilityLabel("Comparison divider")
+            setAccessibilityRole(.slider)
         }
         required init?(coder:NSCoder) { nil }
+        override func acceptsFirstMouse(for event:NSEvent?)->Bool { true }
+        override func viewDidChangeBackingProperties() { super.viewDidChangeBackingProperties(); knob.contentsScale=window?.backingScaleFactor ?? 2 }
+        override func hitTest(_ point:NSPoint)->NSView? {
+            guard bounds.contains(convert(point,from:superview)) else { return nil }
+            return super.hitTest(point)
+        }
+        override func resetCursorRects() {
+            if mode == .compare { addCursorRect(CGRect(x:bounds.width*wipe-16,y:0,width:32,height:bounds.height),cursor:.resizeLeftRight) }
+        }
+        override func mouseDown(with event:NSEvent) {
+            let point=convert(event.locationInWindow,from:nil)
+            draggingWipe=mode == .compare && abs(point.x-bounds.width*wipe)<18
+            if draggingWipe { moveDivider(to:point.x/bounds.width) }
+            else { super.mouseDown(with:event) }
+        }
+        override func mouseDragged(with event:NSEvent) {
+            if draggingWipe { moveDivider(to:convert(event.locationInWindow,from:nil).x/bounds.width) }
+        }
+        override func mouseUp(with event:NSEvent) {
+            if draggingWipe { moveDivider(to:convert(event.locationInWindow,from:nil).x/bounds.width) }
+            draggingWipe=false; onWipe?(wipe); window?.invalidateCursorRects(for:self)
+        }
+        func moveDivider(to fraction:Double) {
+            wipe=max(0.02,min(0.98,fraction))
+            CATransaction.begin(); CATransaction.setDisableActions(true)
+            layoutDivider()
+            CATransaction.commit()
+        }
+        override func accessibilityValue()->Any? { "\(Int(wipe*100)) percent original" }
+        override func accessibilityPerformIncrement()->Bool { guard mode == .compare else { return false }; moveDivider(to:wipe+0.05); onWipe?(wipe); return true }
+        override func accessibilityPerformDecrement()->Bool { guard mode == .compare else { return false }; moveDivider(to:wipe-0.05); onWipe?(wipe); return true }
         override func layout() {
             super.layout()
             guard let details else { return }
@@ -158,11 +182,18 @@ struct ComparisonSurface:NSViewRepresentable {
             source.setAffineTransform(CGAffineTransform(rotationAngle:-details.rotation * .pi/180))
             sourceViewport.isHidden=mode == .output
             output.frame=bounds; output.isHidden=mode == .original
+            layoutDivider()
+            CATransaction.commit()
+        }
+        private func layoutDivider() {
+            setAccessibilityElement(mode == .compare)
+            divider.isHidden=mode != .compare; knob.isHidden=mode != .compare
             if mode == .compare {
+                divider.frame=CGRect(x:bounds.width*wipe-0.75,y:0,width:1.5,height:bounds.height)
+                knob.frame=CGRect(x:bounds.width*wipe-14,y:bounds.midY-14,width:28,height:28)
                 wipeMask.frame=CGRect(x:bounds.width*wipe,y:0,width:bounds.width*(1-wipe),height:bounds.height)
                 output.mask=wipeMask
             } else { output.mask=nil }
-            CATransaction.commit()
         }
     }
 }
@@ -177,20 +208,20 @@ struct CropOverlay:View {
                 Path { path in path.addRect(CGRect(origin:.zero,size:geo.size)); path.addRect(r) }.fill(.black.opacity(0.5),style:FillStyle(eoFill:true)).allowsHitTesting(false)
                 Rectangle().fill(.clear).contentShape(Rectangle()).overlay(Rectangle().stroke(.white,lineWidth:1))
                     .frame(width:r.width,height:r.height).position(x:r.midX,y:r.midY)
-                    .gesture(DragGesture().onChanged { value in
+                    .gesture(DragGesture(coordinateSpace:.named("crop")).onChanged { value in
                         if original == nil { original=crop }
                         guard let o=original else { return }
                         crop.origin=CGPoint(x:max(0,min(1-o.width,o.minX+value.translation.width/geo.size.width)),y:max(0,min(1-o.height,o.minY+value.translation.height/geo.size.height)))
                     }.onEnded { _ in original=nil })
                 Image(systemName:"arrow.up.left.and.arrow.down.right").font(.system(size:12,weight:.bold)).foregroundStyle(.black).padding(5).background(.white,in:RoundedRectangle(cornerRadius:3))
                     .position(x:r.maxX-8,y:r.maxY-8)
-                    .gesture(DragGesture().onChanged { value in
+                    .gesture(DragGesture(coordinateSpace:.named("crop")).onChanged { value in
                         if original == nil { original=crop }
                         guard let o=original else { return }
                         let factor=max(0.05,min((1-o.minX)/o.width,(1-o.minY)/o.height,1+value.translation.width/(o.width*geo.size.width)))
                         crop.size=CGSize(width:o.width*factor,height:o.height*factor)
                     }.onEnded { _ in original=nil })
-            }
+            }.coordinateSpace(name:"crop")
         }
     }
 }

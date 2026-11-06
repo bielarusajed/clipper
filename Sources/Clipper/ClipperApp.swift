@@ -30,6 +30,11 @@ import AppKit
                 Button("Set Start Here") { editor.markStart() }.disabled(editor.exporting || editor.loading)
                 Button("Set End Here") { editor.markEnd() }.disabled(editor.exporting || editor.loading)
             }
+            CommandGroup(after:.toolbar) {
+                Button("Zoom Timeline In") { editor.zoomTimeline(by:0.5) }.keyboardShortcut("=").disabled(editor.source == nil)
+                Button("Fit Timeline") { editor.timelineZoom=0 }.keyboardShortcut("0").disabled(editor.source == nil)
+                Button("Zoom Timeline Out") { editor.zoomTimeline(by:-0.5) }.keyboardShortcut("-").disabled(editor.source == nil)
+            }
         }
     }
 }
@@ -40,6 +45,12 @@ import AppKit
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular); NSApp.activate(ignoringOtherApps:true)
         keyMonitor=NSEvent.addLocalMonitorForEvents(matching:.keyDown) { [weak self] event in
+            if let editor=self?.editor, editor.source != nil, !(NSApp.keyWindow is NSPanel),
+               event.modifierFlags.intersection([.command,.control,.option]) == .command,
+               ["+","=","-"].contains(event.charactersIgnoringModifiers ?? "") {
+                editor.zoomTimeline(by:event.charactersIgnoringModifiers == "-" ? -0.5 : 0.5)
+                return nil
+            }
             guard let editor=self?.editor, !editor.loading, !editor.exporting, editor.details != nil,
                   !(NSApp.keyWindow is NSPanel),
                   !(NSApp.keyWindow?.firstResponder is NSTextView),

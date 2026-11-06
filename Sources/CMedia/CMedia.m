@@ -12,7 +12,7 @@
 #include <stdatomic.h>
 
 struct ClipRequest { atomic_int generation; };
-enum { RenderCacheCount=4, RawCacheCount=48 };
+enum { RenderCacheCount=4, RawCacheCount=48, AudioCacheCount=128 };
 ClipRequest *clip_request_create(void) { ClipRequest *r=calloc(1,sizeof(*r)); atomic_init(&r->generation,0); return r; }
 void clip_request_free(ClipRequest *r) { free(r); }
 void clip_request_set(ClipRequest *r,int generation) { atomic_store(&r->generation,generation); }
@@ -36,6 +36,11 @@ struct ClipMedia {
     AVFrame *rawCache[RawCacheCount];
     double rawTime[RawCacheCount], rawDuration[RawCacheCount];
     int rawConfirmed[RawCacheCount], rawSlot, lastRaw, rawCapacity;
+    uint64_t segment, rawSegment[RawCacheCount];
+    ClipSample audioCache[AudioCacheCount], resumeAudio[AudioCacheCount];
+    int audioSlot, resumeAudioCount, resumeAudioIndex;
+    AVFrame *resumeFrames[RawCacheCount];
+    int resumeFrameCount, resumeFrameIndex;
 };
 
 static void message(char *out, int size, int code) { av_strerror(code, out, size); }
@@ -124,8 +129,24 @@ ClipMedia *clip_open(const char *path, int audioTrack, char *error, int errorSiz
 fail:
     message(error, errorSize, rc); clip_close(m); return NULL;
 }
+static void clearResume(ClipMedia *m) {
+    for (int i=0;i<RawCacheCount;i++) av_frame_free(&m->resumeFrames[i]);
+    for (int i=0;i<AudioCacheCount;i++) {
+        if (m->resumeAudio[i].sample) CFRelease(m->resumeAudio[i].sample);
+        m->resumeAudio[i]=(ClipSample){0};
+    }
+    m->resumeFrameCount=m->resumeFrameIndex=m->resumeAudioCount=m->resumeAudioIndex=0;
+}
+static void clearAudioCache(ClipMedia *m) {
+    for (int i=0;i<AudioCacheCount;i++) {
+        if (m->audioCache[i].sample) CFRelease(m->audioCache[i].sample);
+        m->audioCache[i]=(ClipSample){0};
+    }
+    m->audioSlot=0;
+}
 void clip_close(ClipMedia *m) {
     if (!m) return;
+    clearResume(m); clearAudioCache(m);
     for (int i=0;i<RenderCacheCount;i++) if (m->cache[i].sample) CFRelease(m->cache[i].sample);
     for (int i=0;i<RawCacheCount;i++) av_frame_free(&m->rawCache[i]);
     avformat_close_input(&m->format);
@@ -143,6 +164,7 @@ int clip_seek(ClipMedia *m, double time) {
     int64_t timestamp = (int64_t)((fmax(0,time-preroll) + m->info.origin) * AV_TIME_BASE);
     int rc = avformat_seek_file(m->format, -1, INT64_MIN, timestamp, timestamp, AVSEEK_FLAG_BACKWARD);
     if (rc < 0) return rc;
+    clearResume(m); clearAudioCache(m); m->segment += 1;
     avcodec_flush_buffers(m->video);
     if (m->audio) avcodec_flush_buffers(m->audio);
     if (m->swr) { swr_close(m->swr); swr_init(m->swr); }
@@ -234,9 +256,16 @@ static ClipSample audioSample(ClipMedia *m, AVFrame *f) {
     free(data);
     CMSampleTimingInfo timing = {CMTimeMake(1,48000),CMTimeMakeWithSeconds(t,1000000),kCMTimeInvalid};
     CMSampleBufferRef sample = NULL;
-    OSStatus rc = CMSampleBufferCreateReady(NULL,block,desc,count,1,&timing,0,NULL,&sample);
+    size_t sampleSize=8;
+    OSStatus rc = CMSampleBufferCreateReady(NULL,block,desc,count,1,&timing,1,&sampleSize,&sample);
     CFRelease(block); CFRelease(desc);
-    return (ClipSample){sample,t,(double)count/48000,pts,s->time_base.num,s->time_base.den,rc==0 ? 2 : -1};
+    ClipSample result={sample,t,(double)count/48000,pts,s->time_base.num,s->time_base.den,rc==0 ? 2 : -1};
+    if (m->cacheEnabled && result.kind==2) {
+        int slot=m->audioSlot++%AudioCacheCount;
+        if (m->audioCache[slot].sample) CFRelease(m->audioCache[slot].sample);
+        m->audioCache[slot]=result; CFRetain(sample);
+    }
+    return result;
 }
 static void cacheRawFrame(ClipMedia *m) {
     if (!m->cacheEnabled) return;
@@ -246,7 +275,8 @@ static void cacheRawFrame(ClipMedia *m) {
     if (m->lastRaw>=0 && t>m->rawTime[m->lastRaw]) { m->rawDuration[m->lastRaw]=t-m->rawTime[m->lastRaw]; m->rawConfirmed[m->lastRaw]=1; }
     int slot=m->rawSlot++%m->rawCapacity;
     av_frame_free(&m->rawCache[slot]); m->rawCache[slot]=av_frame_clone(f);
-    m->rawTime[slot]=t; m->rawConfirmed[slot]=0; m->lastRaw=slot;
+    m->rawTime[slot]=t; m->rawConfirmed[slot]=0; m->lastRaw=slot; m->rawSegment[slot]=m->segment;
+    m->rawDuration[slot]=f->duration>0 ? f->duration*av_q2d(m->format->streams[m->vi]->time_base) : 1.0/m->info.fps;
 }
 static int decodeFrame(ClipMedia *m) {
     av_frame_unref(m->frame);
@@ -279,7 +309,67 @@ static int decodeFrame(ClipMedia *m) {
         av_packet_unref(m->packet);
     }
 }
+// Reuse a continuous decoded segment and its audio, never an unrelated cache hit.
+int clip_resume(ClipMedia *m,double start) {
+    clearResume(m);
+    int slots[RawCacheCount], count=0;
+    for (int i=0;i<m->rawCapacity;i++) if (m->rawCache[i] && m->rawSegment[i]==m->segment) {
+        int j=count;
+        while (j>0 && m->rawTime[slots[j-1]]>m->rawTime[i]) { slots[j]=slots[j-1]; j--; }
+        slots[j]=i; count++;
+    }
+    int first=-1;
+    for (int n=0;n<count;n++) {
+        int i=slots[n];
+        if (m->rawTime[i]<=start+0.000001 && start<m->rawTime[i]+m->rawDuration[i]-0.0000001) first=n;
+    }
+    if (first<0 || count==0 || slots[count-1]!=m->lastRaw) return 0;
+    for (int n=first;n<count-1;n++) {
+        int i=slots[n], next=slots[n+1];
+        if (!m->rawConfirmed[i] || fabs(m->rawTime[i]+m->rawDuration[i]-m->rawTime[next])>0.000001) return 0;
+    }
+    if (m->audio) {
+        int firstAudio=-1, total=m->audioSlot<AudioCacheCount ? m->audioSlot : AudioCacheCount;
+        int oldest=m->audioSlot-total;
+        for (int n=0;n<total;n++) {
+            ClipSample a=m->audioCache[(oldest+n)%AudioCacheCount];
+            if (a.time<=start+0.00003 && start<a.time+a.duration) { firstAudio=n; break; }
+        }
+        if (firstAudio<0) return 0;
+        for (int n=firstAudio;n<total;n++) {
+            ClipSample a=m->audioCache[(oldest+n)%AudioCacheCount];
+            if (n==firstAudio && a.time<start) {
+                CMItemCount skip=(CMItemCount)ceil((start-a.time)*48000);
+                CMItemCount samples=CMSampleBufferGetNumSamples(a.sample);
+                if (skip>=samples) { clearResume(m); return 0; }
+                CMSampleBufferRef trimmed=NULL;
+                OSStatus rc=CMSampleBufferCopySampleBufferForRange(NULL,a.sample,CFRangeMake(skip,samples-skip),&trimmed);
+                if (rc!=noErr) { clearResume(m); return 0; }
+                a.sample=trimmed; a.time+=skip/48000.0; a.duration=(samples-skip)/48000.0;
+            } else CFRetain(a.sample);
+            m->resumeAudio[m->resumeAudioCount++]=a;
+        }
+    }
+    for (int n=first;n<count;n++) {
+        AVFrame *frame=av_frame_clone(m->rawCache[slots[n]]);
+        if (!frame) { clearResume(m); return 0; }
+        m->resumeFrames[m->resumeFrameCount++]=frame;
+    }
+    m->audioFloor=start;
+    return 1;
+}
 ClipSample clip_next_cancellable(ClipMedia *m, ClipRequest *request,int generation) {
+    if (request && atomic_load(&request->generation)!=generation) return (ClipSample){.kind=-3};
+    AVFrame *replay=m->resumeFrameIndex<m->resumeFrameCount ? m->resumeFrames[m->resumeFrameIndex] : NULL;
+    ClipSample a=m->resumeAudioIndex<m->resumeAudioCount ? m->resumeAudio[m->resumeAudioIndex] : (ClipSample){0};
+    double t=replay ? replay->best_effort_timestamp*av_q2d(m->format->streams[m->vi]->time_base)-m->info.origin : INFINITY;
+    if (replay && (!a.sample || t<=a.time)) {
+        ClipSample result=videoSample(m,replay);
+        av_frame_free(&m->resumeFrames[m->resumeFrameIndex++]);
+        return result;
+    }
+    if (a.sample) { m->resumeAudio[m->resumeAudioIndex++]=(ClipSample){0}; return a; }
+
     for (;;) {
         if (request && atomic_load(&request->generation)!=generation) { m->lastDecoded=NAN; return (ClipSample){.kind=-3}; }
         int kind=decodeFrame(m);
@@ -295,12 +385,13 @@ ClipSample clip_next_cancellable(ClipMedia *m, ClipRequest *request,int generati
 }
 ClipSample clip_next(ClipMedia *m) { return clip_next_cancellable(m,NULL,0); }
 ClipSample clip_frame_cancellable(ClipMedia *m, double time, ClipRequest *request, int generation) {
+    clearResume(m);
     ClipSample previous = {0};
     for (int i=0;i<RenderCacheCount;i++) {
         ClipSample s=m->cache[i];
         if (!s.sample) continue;
         if (m->confirmed[i] && time>=s.time-0.0000001 && time<s.time+s.duration-0.0000001) { CFRetain(s.sample); return s; }
-        if (fabs(s.time-m->lastDecoded)<0.0000001 && time>=s.time && time<s.time+0.25) previous=s;
+        if (fabs(s.time-m->lastDecoded)<0.0000001 && time>=s.time && time<s.time+2.0) previous=s;
     }
     for (int i=0;i<m->rawCapacity;i++) {
         if (m->rawCache[i] && m->rawConfirmed[i] && time>=m->rawTime[i]-0.0000001 && time<m->rawTime[i]+m->rawDuration[i]-0.0000001) {
@@ -315,10 +406,19 @@ ClipSample clip_frame_cancellable(ClipMedia *m, double time, ClipRequest *reques
         if (request && atomic_load(&request->generation)!=generation) { m->lastDecoded=NAN; if (previous.sample) CFRelease(previous.sample); av_frame_free(&raw); return (ClipSample){.kind=-3}; }
         int kind=decodeFrame(m);
         if (kind<=0) {
-            if (raw->buf[0]) { if (previous.sample) CFRelease(previous.sample); previous=videoSample(m,raw); cacheFrame(m,previous); }
+            if (raw->buf[0]) { if (previous.sample) CFRelease(previous.sample); previous=videoSample(m,raw); m->lastDecoded=NAN; cacheFrame(m,previous); }
             av_frame_free(&raw); return previous.kind==1 ? previous : (ClipSample){.kind=kind};
         }
-        if (kind==2) continue;
+        if (kind==2) {
+            if (m->cacheEnabled) {
+                // Keep the packet straddling the selected video frame intact.
+                // Its start can precede the typed sub-frame seek time.
+                double floor=m->audioFloor; m->audioFloor=-INFINITY;
+                ClipSample audio=audioSample(m,m->frame); m->audioFloor=floor;
+                if (audio.sample) CFRelease(audio.sample);
+            }
+            continue;
+        }
         AVStream *stream=m->format->streams[m->vi];
         double t=m->frame->best_effort_timestamp*av_q2d(stream->time_base)-m->info.origin;
         if (t<=time+0.000001) { av_frame_unref(raw); av_frame_ref(raw,m->frame); continue; }
@@ -332,7 +432,9 @@ ClipSample clip_frame_cancellable(ClipMedia *m, double time, ClipRequest *reques
             continue;
         }
         ClipSample next=videoSample(m,m->frame);
-        if (raw->buf[0]) { if (previous.sample) CFRelease(previous.sample); previous=videoSample(m,raw); cacheFrame(m,previous); }
+        // Decoding may have skipped many unconverted frames. Only the selected
+        // frame and its immediate successor can confirm a display interval.
+        if (raw->buf[0]) { if (previous.sample) CFRelease(previous.sample); previous=videoSample(m,raw); m->lastDecoded=NAN; cacheFrame(m,previous); }
         cacheFrame(m,next); av_frame_free(&raw);
         if (next.time > time + 0.000001) {
             if (previous.kind == 1) { previous.duration = next.time-previous.time; CFRelease(next.sample); return previous; }

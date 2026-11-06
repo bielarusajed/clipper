@@ -23,6 +23,9 @@ import UniformTypeIdentifiers
     @Published var previewStart=0.0
     @Published var previewDuration=0.0
     @Published private(set) var nextOutputURL:URL?
+    @Published var timelineZoom=0.0
+    var maximumTimelineZoom:Double { max(0.01,min(16,log2(max(1,min(8_000_000,(details?.duration ?? 1)*(details?.fps ?? 30)*150)/1000)))) }
+    func zoomTimeline(by amount:Double) { timelineZoom=max(0,min(maximumTimelineZoom,timelineZoom+amount)) }
     @Published private(set) var boundaryRevision=0
     private(set) var lastBoundaryIsStart=true
     let outputPlayer=AVPlayer()
@@ -70,7 +73,7 @@ import UniformTypeIdentifiers
     }
     func open(_ url: URL) {
         guard !exporting else { error="Finish or cancel the current export before opening another video."; return }
-        cancelNudges()
+        cancelNudges(); timelineZoom=0
         let id=UUID(); loadingID=id; loading=true
         invalidatePreview(); source=url; start=nil; end=nil; edit=EditSettings(); error=nil; lastExport=nil; nextOutputURL=uniqueOutput(for:url)
         playback.setMuted(false)

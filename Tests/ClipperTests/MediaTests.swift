@@ -6,6 +6,44 @@ import Combine
 @testable import Clipper
 
 final class MediaTests:XCTestCase {
+    final class ObservedVideoLayer:AVSampleBufferDisplayLayer {
+        var imageRemovals=0
+        override func flushAndRemoveImage() { imageRemovals += 1; super.flushAndRemoveImage() }
+    }
+    @MainActor func testPlayPauseRetainsImageAndResumesWithoutSeeking() async throws {
+        let layer=ObservedVideoLayer()
+        // Use the same real renderer implementation, observing only image removal.
+        let playback=Playback(video:layer)
+        let ready=expectation(description:"Opened")
+        playback.open(fixture("cfr.mp4"),at:2,completion:{ready.fulfill()})
+        await fulfillment(of:[ready],timeout:4)
+        let removals=layer.imageRemovals
+        playback.play()
+        try await waitUntil { playback.clock.rate>0 }
+        XCTAssertEqual(layer.imageRemovals,removals,"Playing must keep the paused image visible during preparation")
+        try await Task.sleep(nanoseconds:150_000_000)
+        playback.pauseAndResolve()
+        XCTAssertFalse(playback.seeking,"Pause resolves from decoded playback frames without a demuxer seek")
+        try await waitUntil { !playback.seeking }
+        let paused=playback.position
+        let start=Date()
+        playback.play()
+        try await waitUntil { playback.clock.rate>0 }
+        XCTAssertLessThan(Date().timeIntervalSince(start),0.12,"Warm resume should start immediately")
+        XCTAssertGreaterThanOrEqual(playback.position,paused)
+        XCTAssertEqual(layer.imageRemovals,removals)
+        playback.close()
+    }
+    @MainActor func testCancellingPlaybackStartupAllowsTheNextPlay() async throws {
+        let p=Playback(), opened=expectation(description:"Opened")
+        p.open(fixture("cfr.mp4"),at:2,completion:{opened.fulfill()})
+        await fulfillment(of:[opened],timeout:4)
+        p.play(); p.pause()
+        XCTAssertFalse(p.starting); XCTAssertFalse(p.playing)
+        p.play()
+        try await waitUntil { p.clock.rate>0 && !p.starting }
+        p.close()
+    }
     let root=URL(fileURLWithPath:#filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
     func fixture(_ name:String)->URL { root.appendingPathComponent(".build/fixtures/"+name) }
     func open(_ url:URL) throws -> OpaquePointer {
@@ -146,6 +184,57 @@ final class MediaTests:XCTestCase {
             }
         }
     }
+    func testCachedResumeMatchesContinuousAudioVideoDecode() throws {
+        for name in ["cfr.mp4","vfr.mkv","vp9.webm","av1.webm"] {
+            let expected=try frames(fixture(name))
+            let m=try open(fixture(name)); defer { clip_close(m) }; clip_enable_cache(m)
+            let point=clip_frame(m,2.501); point.sample?.release()
+            XCTAssertEqual(clip_resume(m,point.time),1,"Resume cache should cover the selected frame and audio: \(name)")
+            var actual:[Double]=[], audio:[(Double,Double)]=[]
+            while true {
+                let s=clip_next(m); s.sample?.release()
+                if s.kind<=0 { XCTAssertEqual(s.kind,0); break }
+                if s.kind==1 { actual.append(s.time) }
+                else { audio.append((s.time,s.duration)) }
+            }
+            let chosen=expected.filter{$0.0>=point.time-0.000001}.map{$0.0}
+            XCTAssertEqual(actual.count,chosen.count,name)
+            for (a,b) in zip(actual,chosen) { XCTAssertEqual(a,b,accuracy:0.000002,name) }
+            XCTAssertEqual(audio.first?.0 ?? -1,point.time,accuracy:1.0/48000+0.000001,name)
+            for pair in zip(audio,audio.dropFirst()) { XCTAssertEqual(pair.0.0+pair.0.1,pair.1.0,accuracy:0.002,"Audio continuity: \(name)") }
+        }
+    }
+    func testForwardContinuationKeepsCachedFrameIntervalsExact() throws {
+        for name in ["cfr.mp4","vfr.mkv"] {
+            let all=try frames(fixture(name)), m=try open(fixture(name)); defer { clip_close(m) }
+            clip_enable_cache(m)
+            for t in [1.001,2.99,1.083335,1.125002,1.166669] {
+                let s=clip_frame(m,t); s.sample?.release()
+                let expected=all.last(where:{$0.0<=t+0.000001})!.0
+                XCTAssertEqual(s.time,expected,accuracy:0.000002,"\(name) at \(t)")
+            }
+        }
+    }
+    @MainActor func testReal4KPlaybackStartsAndResumesPromptlyWhenProvided() async throws {
+        guard let path=ProcessInfo.processInfo.environment["CLIPPER_SAMPLE"] else { throw XCTSkip("Set CLIPPER_SAMPLE to measure transport latency") }
+        let p=Playback(); let opened=expectation(description:"Sample opened")
+        p.open(URL(fileURLWithPath:path),at:493.5,completion:{opened.fulfill()})
+        await fulfillment(of:[opened],timeout:10)
+        let start=Date(); p.play()
+        try await waitUntil { p.clock.rate>0 }
+        let first=Date().timeIntervalSince(start)
+        XCTAssertLessThan(first,0.3,"Play after seeking should reuse decoded A/V")
+        try await Task.sleep(nanoseconds:220_000_000)
+        p.pauseAndResolve()
+        XCTAssertFalse(p.seeking)
+        XCTAssertEqual(p.frame?.time,p.position)
+        let resume=Date(); p.play()
+        try await waitUntil { p.clock.rate>0 }
+        let elapsed=Date().timeIntervalSince(resume)
+        XCTAssertLessThan(elapsed,0.08)
+        print("Transport timing: initial \(Int(first*1000)) ms, warm resume \(Int(elapsed*1000)) ms")
+        p.close()
+    }
     @MainActor func testRapidStepsAndMarkWaitForTheRequestedFrame() async throws {
         let editor=Editor()
         editor.open(fixture("cfr.mp4"))
@@ -169,10 +258,10 @@ final class MediaTests:XCTestCase {
         XCTAssertFalse(editor.playback.seeking)
         XCTAssertTrue(editor.canExport)
     }
-    @MainActor private func waitUntil(_ condition:() -> Bool,timeout:Double=8) async throws {
+    @MainActor private func waitUntil(_ condition:() -> Bool,timeout:Double=8,file:StaticString=#filePath,line:UInt=#line) async throws {
         let deadline=Date().addingTimeInterval(timeout)
         while !condition(), Date()<deadline { try await Task.sleep(nanoseconds:10_000_000) }
-        XCTAssertTrue(condition(),"Timed out waiting for media state")
+        XCTAssertTrue(condition(),"Timed out waiting for media state",file:file,line:line)
     }
     @MainActor func testQuietComparisonChaseCoalescesAndCloseResetsState() async throws {
         let editor=Editor(); editor.open(fixture("vfr.mkv"))
@@ -280,6 +369,14 @@ final class MediaTests:XCTestCase {
         XCTAssertEqual(source.position.y,135,accuracy:0.001)
         XCTAssertEqual(surface.wipeMask.frame.minX,384,accuracy:0.001)
         XCTAssertTrue(source.superlayer === surface.sourceViewport)
+        for value in [0.1,0.9,0.2,0.8,0.5] {
+            surface.moveDivider(to:value)
+            XCTAssertEqual(surface.wipeMask.frame.minX,960*value,accuracy:0.001)
+            XCTAssertEqual(surface.divider.frame.midX,960*value,accuracy:0.001)
+            XCTAssertEqual(surface.knob.frame.midX,960*value,accuracy:0.001)
+        }
+        XCTAssertEqual(surface.layer?.sublayers?.filter{$0 === surface.divider}.count,1)
+        XCTAssertNil(surface.divider.animationKeys())
         surface.mode = .output; surface.needsLayout=true; surface.layoutSubtreeIfNeeded()
         XCTAssertTrue(source.superlayer === surface.sourceViewport)
         XCTAssertTrue(surface.sourceViewport.isHidden)

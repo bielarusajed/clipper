@@ -63,14 +63,12 @@ struct EditorView:View {
                                 rowDivider
                                 HStack {
                                     Text("Snap to source frames")
-                                    Spacer()
-                                    Text("I / O to mark")
                                 }.font(.system(size:10)).foregroundStyle(C1.muted).padding(.horizontal,10).frame(height:27)
                             }
                         }
                         framing(details)
                         videoSettings(details)
-                        audioSettings(details)
+                        if !details.audioLabels.isEmpty { audioSettings(details) }
                     } else {
                         VStack(spacing:12) {
                             if editor.loading { ProgressView().controlSize(.small); Text("Opening video…") }
@@ -167,6 +165,7 @@ struct EditorView:View {
                             .foregroundStyle(selected ? C1.blue : C1.secondary)
                             .background(selected ? C1.blue.opacity(0.09) : .clear,in:RoundedRectangle(cornerRadius:7))
                             .overlay(RoundedRectangle(cornerRadius:7).stroke(selected ? C1.blue.opacity(0.18) : .clear,lineWidth:1))
+                            .contentShape(Rectangle())
                         }.buttonStyle(.plain).help("Crop to \(preset.rawValue)").accessibilityLabel("Crop \(preset.rawValue)")
                             .accessibilityAddTraits(selected ? .isSelected : [])
                     }
@@ -185,7 +184,7 @@ struct EditorView:View {
                     Spacer(minLength:4)
                     Picker("Resolution",selection:$editor.edit.resolution) {
                         ForEach(Resolution.allCases) { Text($0.rawValue).tag($0) }
-                    }.labelsHidden().frame(maxWidth:154)
+                    }.labelsHidden().fixedSize().frame(maxWidth:154,alignment:.trailing)
                 }.font(.system(size:12)).controlSize(.small).padding(.horizontal,10).frame(height:36)
             }
         }
@@ -218,20 +217,21 @@ struct EditorView:View {
     private func audioSettings(_ details:MediaDetails)->some View {
         section("Audio") {
             C1Group {
-                if details.audioLabels.isEmpty {
-                    Text("No audio track").font(.system(size:11)).foregroundStyle(C1.muted).frame(maxWidth:.infinity,alignment:.leading).padding(11)
-                } else {
+                if details.audioLabels.count > 1 {
                     HStack {
                         Text("Track")
                         Spacer(minLength:4)
                         Picker("Audio track",selection:$editor.edit.audioTrack) {
                             ForEach(details.audioLabels.indices,id:\.self) { Text(details.audioLabels[$0]).tag($0) }
-                        }.labelsHidden().frame(maxWidth:170)
+                        }.labelsHidden().fixedSize().frame(maxWidth:170,alignment:.trailing)
                     }.font(.system(size:12)).controlSize(.small).padding(.horizontal,10).frame(height:35)
                     rowDivider
-                    Toggle("Include audio",isOn:Binding(get:{!editor.edit.muted},set:{editor.edit.muted = !$0}))
-                        .font(.system(size:12)).toggleStyle(.switch).controlSize(.mini).padding(.horizontal,10).frame(height:34)
                 }
+                HStack {
+                    Text("Exclude audio")
+                    Spacer()
+                    Toggle("Exclude audio",isOn:$editor.edit.muted).labelsHidden().toggleStyle(.switch).controlSize(.mini)
+                }.font(.system(size:12)).padding(.horizontal,10).frame(height:34)
             }
         }
     }
@@ -256,20 +256,24 @@ struct EditorView:View {
                                 .font(.system(size:9)).foregroundStyle(C1.muted).monospacedDigit()
                         }
                     }.frame(maxWidth:.infinity,alignment:.leading)
-                    Menu {
-                        Button("Save As…") { editor.export(saveAs:true) }.disabled(!editor.canExport)
-                        if editor.lastExport != nil { Button("Show Last Export in Finder") { editor.revealExport() } }
-                    } label: { Image(systemName:"ellipsis").font(.system(size:12)) }.menuStyle(.borderlessButton).menuIndicator(.hidden).frame(width:20).help("Save As and export actions")
                 }
                 HStack(spacing:8) {
                     Button("Preview 5 s") { editor.preview() }.buttonStyle(C1ButtonStyle()).disabled(!editor.canExport)
-                    Button("Export Clip") { editor.export() }.buttonStyle(C1ButtonStyle(primary:true)).disabled(!editor.canExport)
+                    HStack(spacing:0) {
+                        Button("Export Clip") { editor.export() }
+                            .frame(maxWidth:.infinity,minHeight:34).contentShape(Rectangle())
+                        Color.white.opacity(0.25).frame(width:1,height:20)
+                        Button { editor.export(saveAs:true) } label: {
+                            Image(systemName:"folder").frame(width:30,height:34).contentShape(Rectangle())
+                        }.help("Export As… (⇧⌘E)").accessibilityLabel("Export As…")
+                    }.buttonStyle(.plain).font(.system(size:12,weight:.medium)).foregroundStyle(.white)
+                        .background(LinearGradient(colors:[Color(red:0.16,green:0.53,blue:0.98),C1.blue],startPoint:.top,endPoint:.bottom),in:RoundedRectangle(cornerRadius:8))
+                        .overlay(RoundedRectangle(cornerRadius:8).stroke(C1.blue.opacity(0.4),lineWidth:1).allowsHitTesting(false))
+                        .opacity(editor.canExport ? 1 : 0.45).disabled(!editor.canExport)
                 }
                 if editor.lastExport != nil {
                     Button { editor.revealExport() } label: { Label("Saved · Show in Finder",systemImage:"checkmark.circle.fill") }
                         .buttonStyle(.plain).font(.system(size:9)).foregroundStyle(C1.secondary).frame(maxWidth:.infinity)
-                } else {
-                    Text("Save beside original · never overwrite").font(.system(size:9)).foregroundStyle(C1.muted).frame(maxWidth:.infinity)
                 }
             }
         }.padding(.horizontal,14).padding(.top,12).padding(.bottom,14)
@@ -290,11 +294,7 @@ struct EditorView:View {
                 Spacer()
             }.buttonStyle(.borderless).font(.system(size:11)).foregroundStyle(C1.secondary).frame(height:27)
             Timeline(editor:editor,playback:playback).frame(height:144)
-            HStack(spacing:14) {
-                Text("I  Set start"); Text("O  Set end"); Text("← →  Step a frame")
-                Spacer()
-                Text("Scroll to move through the timeline")
-            }.font(.system(size:9)).foregroundStyle(C1.muted)
+
         }.padding(.horizontal,18).padding(.top,12).padding(.bottom,12)
             .background(C1.paper).overlay(C1.line.frame(height:1),alignment:.top)
             .disabled(editor.loading || editor.exporting)

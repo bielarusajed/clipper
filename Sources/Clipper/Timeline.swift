@@ -6,24 +6,34 @@ import CMedia
 struct Timeline:View {
     @ObservedObject var editor:Editor
     @ObservedObject var playback:Playback
-    @State private var zoom=0.0
     @State private var visibleStart=0.0
     @State private var visibleEnd=0.0
     @State private var panTarget:Double?
     var body:some View {
         VStack(spacing:6) {
             overview
-            TimelineSurface(editor:editor,position:editor.displayedPosition,zoom:pow(2,zoom),busy:playback.playing || playback.seeking || editor.previewPlaying || editor.comparisonPreparing,panTarget:panTarget) { start,end in
+            TimelineSurface(editor:editor,position:editor.displayedPosition,zoom:pow(2,editor.timelineZoom),busy:playback.playing || playback.seeking || editor.previewPlaying || editor.comparisonPreparing,panTarget:panTarget) { start,end in
                 visibleStart=start; visibleEnd=end
-            }.frame(height:84)
+            }.frame(height:92)
             HStack(spacing:7) {
-                Button("Fit") { zoom=0 }.buttonStyle(.plain).font(.system(size:9))
+                keyHint("I","Set start")
+                keyHint("O","Set end")
+                keyHint("← →","Step a frame")
                 Spacer()
                 Image(systemName:"minus.magnifyingglass")
-                Slider(value:$zoom,in:0...max(0.01,min(16,log2(max(1,min(8_000_000,(editor.details?.duration ?? 1)*(editor.details?.fps ?? 30)*150)/1000))))).frame(width:115).controlSize(.mini).help("Zoom the timeline for precise edits")
+                Slider(value:$editor.timelineZoom,in:0...editor.maximumTimelineZoom).frame(width:115).controlSize(.mini).help("Zoom the timeline (⌘+/⌘− or pinch)")
                 Image(systemName:"plus.magnifyingglass")
             }.font(.system(size:9)).foregroundStyle(C1.muted).frame(height:16)
-        }.onChange(of:editor.source) { _,_ in zoom=0; visibleStart=0; visibleEnd=0; panTarget=nil }
+        }.onChange(of:editor.source) { _,_ in visibleStart=0; visibleEnd=0; panTarget=nil }
+    }
+    private func keyHint(_ key:String,_ action:String)->some View {
+        HStack(spacing:4) {
+            Text(key).font(.system(size:9,weight:.medium,design:.monospaced)).foregroundStyle(C1.secondary)
+                .padding(.horizontal,4).padding(.vertical,2)
+                .background(.white,in:RoundedRectangle(cornerRadius:3))
+                .overlay(RoundedRectangle(cornerRadius:3).stroke(C1.line,lineWidth:1))
+            Text(action).font(.system(size:9)).foregroundStyle(C1.muted)
+        }.accessibilityElement(children:.combine)
     }
     private var overview:some View {
         VStack(spacing:3) {
@@ -60,9 +70,10 @@ struct TimelineSurface:NSViewRepresentable {
     var onViewport:(Double,Double)->Void
     func makeCoordinator()->Coordinator { Coordinator(onViewport:onViewport) }
     func makeNSView(context:Context)->NSScrollView {
-        let scroll=NSScrollView()
+        let scroll=TimelineScrollView()
+        scroll.onMagnify={ editor.zoomTimeline(by:log2(max(0.01,1+$0))) }
         scroll.hasHorizontalScroller=true; scroll.hasVerticalScroller=false
-        scroll.autohidesScrollers=true; scroll.scrollerStyle = .overlay
+        scroll.autohidesScrollers=true; scroll.scrollerStyle = .legacy
         scroll.drawsBackground=false; scroll.verticalScrollElasticity = .none
         let view=TimelineCanvas(frame:CGRect(x:0,y:0,width:800,height:84))
         scroll.documentView=view
@@ -117,6 +128,10 @@ struct TimelineSurface:NSViewRepresentable {
         }
         deinit { if let observer { NotificationCenter.default.removeObserver(observer) } }
     }
+}
+final class TimelineScrollView:NSScrollView {
+    var onMagnify:((Double)->Void)?
+    override func magnify(with event:NSEvent) { onMagnify?(event.magnification) }
 }
 final class TimelineCanvas:NSView {
     override var isFlipped:Bool { true }
