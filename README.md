@@ -17,7 +17,8 @@ Open `dist/Clipper.app`. The app includes its media engine and needs no Homebrew
 - Choose H.264 or H.265 and a quality setting. Video export uses VideoToolbox hardware encoding only. Unsupported encoder sizes produce an error rather than falling back to software.
 - HDR selects HEVC Main10. Convert to SDR explicitly for SDR sharing. Exclude audio with the switch, or choose a track when the source has several. Sources without audio hide the audio section. Audio exports as stereo AAC; subtitles are omitted.
 - Preview 5 Seconds renders a sample beginning at the playhead, bounded to the selection. Switch between original and output. Editing invalidates the sample.
-- The C1 editor keeps clip, framing, video and audio settings in a frosted left sidebar, with preview/export pinned below. Close the source with its × button to return to the Open Video empty state.
+- Floating glass panels hold the left settings and the timeline over one shared window material. The video fills the timeline column width when its aspect ratio allows, and the preview selector aligns with the top of the inspector. The app follows system light/dark appearance. Native glass is used on macOS 26 or newer, with a material fallback on earlier versions.
+- Preview/export stay pinned below the left settings. Close the source with its × button to return to the Open Video empty state.
 - After rendering a preview, choose Compare and drag the wipe to inspect the original crop beside the encoded output. Forward/backward steps align both halves. The episode overview pans the zoomed timeline without changing the clip.
 - Export Clip writes a unique filename beside the source. Its right-hand folder button opens Save As directly. Existing files and the source are never overwritten.
 

@@ -11,20 +11,18 @@ struct EditorView:View {
     var body:some View {
         Group {
             if editor.source != nil {
-                HStack(spacing:0) {
-                    sidebar.frame(width:288)
-                    VStack(spacing:0) {
-                        Viewer(editor:editor,playback:playback)
-                            .frame(maxWidth:.infinity,maxHeight:.infinity)
-                        timelineDeck
+                HStack(spacing:12) {
+                    sidebar.frame(width:288).modifier(GlassPanel(radius:22))
+                    VStack(spacing:12) {
+                        Viewer(editor:editor,playback:playback).frame(maxWidth:.infinity,maxHeight:.infinity)
+                        timelineDeck.modifier(GlassPanel(radius:20))
                     }
-                }
+                }.padding(12)
             } else { emptyState }
         }
-        .background(C1.paper)
+        .background(WindowMaterial().ignoresSafeArea().allowsHitTesting(false))
         .foregroundStyle(C1.ink)
         .tint(C1.blue)
-        .preferredColorScheme(.light)
         .background(WindowAppearance().frame(width:0,height:0))
         .navigationTitle(editor.source?.lastPathComponent ?? "Clipper")
         .overlay {
@@ -79,13 +77,6 @@ struct EditorView:View {
             }.disabled(editor.loading || editor.exporting)
             exportFooter
         }
-        .background {
-            ZStack {
-                SidebarMaterial()
-                LinearGradient(colors:[Color(red:0.80,green:0.87,blue:0.98).opacity(0.40),Color(red:0.74,green:0.80,blue:0.93).opacity(0.34)],startPoint:.topLeading,endPoint:.bottomTrailing)
-            }
-        }
-        .overlay(alignment:.trailing) { C1.line.frame(width:1) }
     }
 
     private var sourceHeader:some View {
@@ -106,8 +97,7 @@ struct EditorView:View {
                 .buttonStyle(.plain).foregroundStyle(C1.secondary).disabled(editor.exporting)
                 .help("Close video and return to the empty state").accessibilityLabel("Close video")
         }
-        .padding(8).background(.white.opacity(0.62),in:RoundedRectangle(cornerRadius:10))
-        .overlay(RoundedRectangle(cornerRadius:10).stroke(.white.opacity(0.75),lineWidth:1))
+        .padding(8)
     }
 
     private func section<Content:View>(_ title:String,detail:String?=nil,@ViewBuilder content:()->Content)->some View {
@@ -130,7 +120,7 @@ struct EditorView:View {
                 .font(.system(size:12,weight:.medium).monospacedDigit())
                 .textFieldStyle(.plain).multilineTextAlignment(.center)
                 .padding(.vertical,5).frame(width:107)
-                .background(C1.paper,in:RoundedRectangle(cornerRadius:5))
+                .background(Color.primary.opacity(0.035),in:RoundedRectangle(cornerRadius:5))
                 .overlay(RoundedRectangle(cornerRadius:5).stroke(C1.line,lineWidth:1))
                 .overlay(alignment:.leading) { C1.amber.frame(width:2).padding(.vertical,4) }
                 .onSubmit {
@@ -296,16 +286,16 @@ struct EditorView:View {
             Timeline(editor:editor,playback:playback).frame(height:144)
 
         }.padding(.horizontal,18).padding(.top,12).padding(.bottom,12)
-            .background(C1.paper).overlay(C1.line.frame(height:1),alignment:.top)
+
             .disabled(editor.loading || editor.exporting)
     }
 
     private var emptyState:some View {
         ZStack {
-            LinearGradient(colors:[C1.paper,Color(red:0.91,green:0.94,blue:0.99)],startPoint:.topLeading,endPoint:.bottomTrailing)
+            Color.clear
             VStack(spacing:15) {
                 Image(systemName:"film.stack").font(.system(size:34,weight:.light)).foregroundStyle(C1.blue)
-                    .frame(width:72,height:72).background(.white.opacity(0.8),in:RoundedRectangle(cornerRadius:15)).overlay(RoundedRectangle(cornerRadius:15).stroke(.white,lineWidth:1))
+                    .frame(width:72,height:72).modifier(GlassPanel(radius:20))
                 Text("Clip a moment from a video").font(.system(size:20,weight:.semibold))
                 Text("Drop a file anywhere in this window,\nor choose a video to start trimming.").multilineTextAlignment(.center).font(.system(size:12)).foregroundStyle(C1.secondary).lineSpacing(4)
                 Button("Open Video…") { editor.openPanel() }.buttonStyle(C1ButtonStyle(primary:true)).frame(width:146)

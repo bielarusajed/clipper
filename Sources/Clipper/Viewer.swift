@@ -4,11 +4,10 @@ import AVKit
 struct Viewer:View {
     @ObservedObject var editor:Editor
     @ObservedObject var playback:Playback
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @State private var wipe=0.5
 
     var body:some View {
-        VStack(spacing:10) {
+        VStack(spacing:12) {
             HStack {
                 Spacer()
                 HStack(spacing:3) {
@@ -17,7 +16,7 @@ struct Viewer:View {
                             Text(mode.rawValue).font(.system(size:11,weight:editor.previewMode == mode ? .medium : .regular))
                                 .frame(width:66,height:24)
                                 .foregroundStyle(editor.previewMode == mode ? C1.ink : C1.secondary)
-                                .background(editor.previewMode == mode ? Color.white : .clear,in:RoundedRectangle(cornerRadius:5))
+                                .background(editor.previewMode == mode ? Color.primary.opacity(0.14) : .clear,in:RoundedRectangle(cornerRadius:5))
                         }.buttonStyle(.plain)
                             .disabled(mode != .original && !editor.previewReady)
                             .accessibilityAddTraits(editor.previewMode == mode ? .isSelected : [])
@@ -50,8 +49,8 @@ struct Viewer:View {
                     .frame(width:display.width,height:display.height)
                     .clipShape(RoundedRectangle(cornerRadius:8))
                     .overlay(RoundedRectangle(cornerRadius:8).stroke(.white.opacity(0.65),lineWidth:0.5))
-                    .background(RoundedRectangle(cornerRadius:8).fill(C1.canvas).shadow(color:C1.ink.opacity(0.18),radius:15,y:9).allowsHitTesting(false))
-                    .position(x:geometry.size.width/2,y:geometry.size.height/2)
+                    .background(RoundedRectangle(cornerRadius:8).fill(.black).shadow(color:.black.opacity(0.12),radius:8,y:2).allowsHitTesting(false))
+                    .position(x:geometry.size.width/2,y:geometry.size.height-display.height/2)
                 } else {
                     Text(editor.loading ? "Preparing the video…" : "Choose another video to continue.")
                         .font(.callout).foregroundStyle(C1.secondary).frame(maxWidth:.infinity,maxHeight:.infinity)
@@ -59,20 +58,8 @@ struct Viewer:View {
             }
 
         }
-        .padding(.horizontal,24).padding(.top,12).padding(.bottom,13)
-        .background {
-            GeometryReader { geometry in
-                ZStack {
-                    C1.canvas
-                    if !reduceTransparency, let image=playback.backdrop {
-                        Image(nsImage:image).resizable().scaledToFill()
-                            .frame(width:geometry.size.width,height:geometry.size.height)
-                            .blur(radius:35).opacity(0.15)
-                    }
-                }.clipped().contentShape(Rectangle()).allowsHitTesting(false)
-            }
-        }
     }
+
     private func imageTag(_ text:String)->some View {
         Text(text).font(.system(size:9,weight:.medium)).foregroundStyle(.white)
             .padding(.horizontal,7).padding(.vertical,4).background(.black.opacity(0.48),in:RoundedRectangle(cornerRadius:4))

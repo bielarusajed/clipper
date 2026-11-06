@@ -11,7 +11,7 @@ import AppKit
                 .onAppear { delegate.editor=editor; delegate.deliverPending() }
                 .onOpenURL { editor.open($0) }
         }
-        .defaultSize(width:1120,height:820)
+        .defaultSize(width:1180,height:800)
         .windowStyle(.titleBar)
         .commands {
             CommandGroup(replacing:.newItem) {

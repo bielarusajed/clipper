@@ -2,31 +2,16 @@ import SwiftUI
 import AppKit
 
 enum C1 {
-    static let ink = Color(red:0.15,green:0.20,blue:0.27)
-    static let secondary = Color(red:0.40,green:0.46,blue:0.53)
-    static let muted = Color(red:0.54,green:0.59,blue:0.65)
+    static let ink = Color.primary
+    static let secondary = Color.secondary
+    static let muted = Color.secondary.opacity(0.8)
     static let blue = Color(red:0.09,green:0.45,blue:0.91)
     static let amber = Color(red:0.90,green:0.64,blue:0.16)
-    static let canvas = Color(red:0.88,green:0.91,blue:0.94)
-    static let paper = Color(red:0.97,green:0.98,blue:0.995)
-    static let line = Color(red:0.39,green:0.50,blue:0.64).opacity(0.14)
+    static let canvas = Color.primary.opacity(0.06)
+    static let paper = Color.clear
+    static let line = Color.primary.opacity(0.1)
     static let selection = NSColor(calibratedRed:0.90,green:0.64,blue:0.16,alpha:1)
-    static let playhead = NSColor(calibratedRed:0.32,green:0.43,blue:0.55,alpha:1)
-}
-
-struct SidebarMaterial: NSViewRepresentable {
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    func makeNSView(context:Context) -> NSVisualEffectView {
-        let view=NSVisualEffectView()
-        view.material = .sidebar
-        view.blendingMode = .behindWindow
-        view.state = .followsWindowActiveState
-        return view
-    }
-    func updateNSView(_ view:NSVisualEffectView,context:Context) {
-        view.material = reduceTransparency ? .windowBackground : .sidebar
-        view.appearance=NSAppearance(named:.aqua)
-    }
+    static let playhead = NSColor.controlAccentColor
 }
 
 struct WindowAppearance: NSViewRepresentable {
@@ -35,22 +20,20 @@ struct WindowAppearance: NSViewRepresentable {
     private final class WindowHook:NSView {
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
-            window?.appearance=NSAppearance(named:.aqua)
+            window?.appearance=nil
             window?.titlebarAppearsTransparent=true
             window?.toolbar=nil
-            window?.backgroundColor=NSColor(calibratedRed:0.96,green:0.97,blue:0.99,alpha:1)
+            window?.isOpaque=false
+            window?.backgroundColor = .clear
+            window?.titleVisibility = .hidden
+            window?.styleMask.insert(.fullSizeContentView)
         }
     }
 }
 
 struct C1Group<Content:View>:View {
     @ViewBuilder var content:Content
-    var body:some View {
-        VStack(spacing:0) { content }
-            .background(.white.opacity(0.73),in:RoundedRectangle(cornerRadius:10))
-            .overlay(RoundedRectangle(cornerRadius:10).stroke(.white.opacity(0.8),lineWidth:1))
-            .shadow(color:C1.ink.opacity(0.025),radius:2,y:1)
-    }
+    var body:some View { VStack(spacing:0) { content } }
 }
 
 struct C1ButtonStyle:ButtonStyle {
@@ -63,7 +46,7 @@ struct C1ButtonStyle:ButtonStyle {
             .foregroundStyle(primary ? Color.white : C1.ink)
             .background {
                 RoundedRectangle(cornerRadius:8).fill(
-                    primary ? LinearGradient(colors:[Color(red:0.16,green:0.53,blue:0.98),C1.blue],startPoint:.top,endPoint:.bottom) : LinearGradient(colors:[.white,.white.opacity(0.88)],startPoint:.top,endPoint:.bottom)
+                    primary ? LinearGradient(colors:[Color(red:0.16,green:0.53,blue:0.98),C1.blue],startPoint:.top,endPoint:.bottom) : LinearGradient(colors:[Color.primary.opacity(0.04),Color.primary.opacity(0.02)],startPoint:.top,endPoint:.bottom)
                 )
             }
             .overlay(RoundedRectangle(cornerRadius:8).stroke(primary ? C1.blue.opacity(0.4) : C1.line,lineWidth:1))

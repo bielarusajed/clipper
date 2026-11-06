@@ -2,6 +2,12 @@
 
 Validated on the user's Apple M1 Pro running macOS 27.0.1 with Xcode 27.2.
 
+## 0.3.0 floating glass adoption
+
+The user selected the native B prototype and authorized applying it to the main app. The production layout removes the study switcher and environment state, the timeline's top rule, and the video's extra horizontal padding. The selector and inspector share a top edge; the video preserves aspect ratio and sits 12 points above the timeline. One window material spans the app, with native glass panels on macOS 26+ and an older-system fallback.
+
+The native comparison-surface geometry and encoded comparison-step tests both passed. Media processing code is unchanged from the previously passing 22-case run recorded below. The release build compiled and was ad-hoc signed. A native reopen with the supplied WebM confirmed the selector at the inspector top, video and timeline sharing left/right edges, no top rule and no prototype switcher. Claude reviewed the production promotion and agreed with the geometry, material placement, availability guards and removal of prototype dependencies. Small review findings reduced the video shadow near the timeline and restored a subtle thumbnail backing.
+
 ## Functional checks
 
 The final 0.2.1 integration run passed all 22 XCTest cases with no skips or failures in 81 seconds, including three optional checks against the supplied 4K60 AV1 WebM. The export check cuts the requested region around 08:13.500–08:20.000 through Clipper's hardware H.264 pipeline at 3840×2160, verifies the frame count and output timestamps, and leaves the source untouched. Selection boundaries snap to decoded presentation times, so a typed sub-frame time is quantized to an actual source frame.

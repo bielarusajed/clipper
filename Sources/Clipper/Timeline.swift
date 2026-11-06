@@ -39,7 +39,7 @@ struct Timeline:View {
     private func keycap(_ key:String)->some View {
         Text(key).font(.system(size:9,weight:.medium,design:.monospaced)).foregroundStyle(C1.secondary)
             .padding(.horizontal,4).padding(.vertical,2)
-            .background(.white,in:RoundedRectangle(cornerRadius:3))
+            .background(Color.primary.opacity(0.045),in:RoundedRectangle(cornerRadius:3))
             .overlay(RoundedRectangle(cornerRadius:3).stroke(C1.line,lineWidth:1))
     }
     private var overview:some View {
@@ -181,7 +181,7 @@ final class TimelineCanvas:NSView {
     private func x(_ t:Double)->Double { t/max(duration,0.001)*bounds.width }
     private func time(_ x:Double)->Double { max(0,min(duration-0.000001,x/bounds.width*duration)) }
     override func draw(_ dirtyRect:NSRect) {
-        NSColor(calibratedRed:0.97,green:0.98,blue:0.995,alpha:1).setFill(); dirtyRect.fill()
+        NSGraphicsContext.current?.cgContext.clear(dirtyRect)
         guard duration > 0 else { return }
         let visible=visibleRect.insetBy(dx:-100,dy:0).intersection(bounds)
         let span=duration/bounds.width*100
@@ -210,7 +210,7 @@ final class TimelineCanvas:NSView {
             }
         }
         let left=x(start), right=x(end)
-        NSColor(calibratedRed:0.97,green:0.98,blue:0.995,alpha:0.64).setFill()
+        NSColor.windowBackgroundColor.withAlphaComponent(0.65).setFill()
         CGRect(x:0,y:24,width:left,height:45).intersection(dirtyRect).fill()
         CGRect(x:right,y:24,width:max(0,bounds.width-right),height:45).intersection(dirtyRect).fill()
         C1.selection.setStroke()
