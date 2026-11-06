@@ -43,6 +43,7 @@ import AppKit
             guard let editor=self?.editor, !editor.loading, !editor.exporting, editor.details != nil,
                   !(NSApp.keyWindow is NSPanel),
                   !(NSApp.keyWindow?.firstResponder is NSTextView),
+                  !(NSApp.keyWindow?.firstResponder is NSControl),
                   event.modifierFlags.intersection([.command,.control,.option]).isEmpty else { return event }
             switch event.keyCode {
             case 123: editor.stepFrame(-1)

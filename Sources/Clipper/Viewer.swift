@@ -21,6 +21,8 @@ struct Viewer:View {
                                 .background(editor.previewMode == mode ? Color.white : .clear,in:RoundedRectangle(cornerRadius:5))
                         }.buttonStyle(.plain)
                             .disabled(mode != .original && !editor.previewReady)
+                            .accessibilityAddTraits(editor.previewMode == mode ? .isSelected : [])
+                            .accessibilityHint(mode != .original && !editor.previewReady ? "Render a five-second preview to enable this view" : "")
                             .help(mode == .original ? "Edit the original video" : "Render a preview, then inspect the \(mode.rawValue.lowercased()) view")
                     }
                 }.padding(3).background(C1.ink.opacity(0.07),in:RoundedRectangle(cornerRadius:8))

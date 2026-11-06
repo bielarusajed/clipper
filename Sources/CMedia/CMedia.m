@@ -307,8 +307,9 @@ ClipSample clip_frame_cancellable(ClipMedia *m, double time, ClipRequest *reques
             ClipSample sample=videoSample(m,m->rawCache[i]); sample.duration=m->rawDuration[i]; return sample;
         }
     }
+    double seekTime=fmax(0,time), lookback=0.5;
     if (previous.sample) CFRetain(previous.sample);
-    else if (clip_seek(m,fmax(0,time)) < 0) return (ClipSample){.kind=-1};
+    else if (clip_seek(m,seekTime) < 0) return (ClipSample){.kind=-1};
     AVFrame *raw=av_frame_alloc();
     for (;;) {
         if (request && atomic_load(&request->generation)!=generation) { m->lastDecoded=NAN; if (previous.sample) CFRelease(previous.sample); av_frame_free(&raw); return (ClipSample){.kind=-3}; }
@@ -321,6 +322,15 @@ ClipSample clip_frame_cancellable(ClipMedia *m, double time, ClipRequest *reques
         AVStream *stream=m->format->streams[m->vi];
         double t=m->frame->best_effort_timestamp*av_q2d(stream->time_base)-m->info.origin;
         if (t<=time+0.000001) { av_frame_unref(raw); av_frame_ref(raw,m->frame); continue; }
+        // Demuxer seek indexes may use decode timestamps. With reordered video,
+        // the chosen keyframe can display after the target. Retry earlier until
+        // we have a containing frame, or reach the beginning of the source.
+        if (!raw->buf[0] && !previous.sample && seekTime>0) {
+            seekTime=fmax(0,seekTime-lookback); lookback*=2;
+            if (clip_seek(m,seekTime)<0) { av_frame_free(&raw); return (ClipSample){.kind=-1}; }
+            m->audioFloor=time;
+            continue;
+        }
         ClipSample next=videoSample(m,m->frame);
         if (raw->buf[0]) { if (previous.sample) CFRelease(previous.sample); previous=videoSample(m,raw); cacheFrame(m,previous); }
         cacheFrame(m,next); av_frame_free(&raw);

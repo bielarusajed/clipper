@@ -40,6 +40,10 @@ struct EditorView:View {
         .onChange(of:editor.edit) { old,_ in editor.settingsChanged(old) }
         .onChange(of:editor.start) { _,_ in startText=TimeText.format(editor.inTime) }
         .onChange(of:editor.end) { _,value in endText=TimeText.format(value?.time ?? 0) }
+        .onChange(of:editor.boundaryRevision) { _,_ in
+            if editor.lastBoundaryIsStart { startText=TimeText.format(editor.inTime) }
+            else { endText=TimeText.format(editor.end?.time ?? 0) }
+        }
         .alert("Clipper",isPresented:Binding(get:{editor.error != nil || playback.error != nil},set:{if !$0 {editor.error=nil;playback.error=nil}})) {
             Button("OK") { editor.error=nil; playback.error=nil }
         } message: { Text(editor.error ?? playback.error ?? "") }
@@ -164,6 +168,7 @@ struct EditorView:View {
                             .background(selected ? C1.blue.opacity(0.09) : .clear,in:RoundedRectangle(cornerRadius:7))
                             .overlay(RoundedRectangle(cornerRadius:7).stroke(selected ? C1.blue.opacity(0.18) : .clear,lineWidth:1))
                         }.buttonStyle(.plain).help("Crop to \(preset.rawValue)").accessibilityLabel("Crop \(preset.rawValue)")
+                            .accessibilityAddTraits(selected ? .isSelected : [])
                     }
                 }.padding(.horizontal,5).padding(.top,8).padding(.bottom,7)
                 if editor.edit.cropPreset == .custom {

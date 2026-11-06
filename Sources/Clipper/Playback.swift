@@ -28,6 +28,7 @@ final class Playback: ObservableObject {
     private var sourceURL: URL?
     private let imageContext=CIContext(options:[.cacheIntermediates:false])
     private var backdropTime=Double.nan
+    private var backdropGeneration=0
     @Published private(set) var backdrop:NSImage?
     @Published var details: MediaDetails?
     @Published var frame: FramePoint?
@@ -64,6 +65,7 @@ final class Playback: ObservableObject {
     }
     func open(_ url: URL, audioTrack: Int = 0, at time: Double = 0, onFailure: (() -> Void)? = nil, completion: (() -> Void)? = nil) {
         stopChasing()
+        resetBackdrop()
         deferredActions=[]
         pause(); seeking=true; error=nil
         let token=nextGeneration()
@@ -95,6 +97,7 @@ final class Playback: ObservableObject {
         stopChasing()
         pause(); seeking=true
         let token=nextGeneration()
+        let backdropSource=currentBackdropGeneration()
         let target=max(0,min(requested,max(0,(details?.duration ?? requested)-0.000001)))
         queue.async { [weak self] in
             guard let self, self.isCurrent(token), let m=self.media else { return }
@@ -111,7 +114,7 @@ final class Playback: ObservableObject {
                let pixel=CMSampleBufferGetImageBuffer(sample) {
                 backdropPixel=pixel; self.backdropTime=frame.time
             }
-            if let pixel=backdropPixel { self.makeBackdrop(pixel,token:token) }
+            if let pixel=backdropPixel { self.makeBackdrop(pixel,sourceToken:backdropSource) }
             DispatchQueue.main.async {
                 guard self.isCurrent(token) else { return }
                 self.present(sample,point:point); self.seeking=false
@@ -122,6 +125,7 @@ final class Playback: ObservableObject {
     }
     func close() {
         stopChasing()
+        resetBackdrop()
         pause(); let token=nextGeneration()
         deferredActions=[]; sourceURL=nil; details=nil; frame=nil; position=0; seeking=false; error=nil; backdrop=nil; endTime = .infinity
         queue.async { [weak self] in
@@ -132,13 +136,18 @@ final class Playback: ObservableObject {
             self.video.flushAndRemoveImage(); self.audio.flush(); self.backdropTime = .nan
         }
     }
-    private func makeBackdrop(_ pixel:CVPixelBuffer,token:Int) {
+    private func resetBackdrop() {
+        requestLock.withLock { backdropGeneration += 1 }
+        backdrop=nil
+    }
+    private func currentBackdropGeneration()->Int { requestLock.withLock { backdropGeneration } }
+    private func makeBackdrop(_ pixel:CVPixelBuffer,sourceToken:Int) {
         imageQueue.async { [weak self] in
-            guard let self, self.isCurrent(token) else { return }
+            guard let self, self.currentBackdropGeneration()==sourceToken else { return }
             var image=CIImage(cvPixelBuffer:pixel)
             image=image.transformed(by:CGAffineTransform(scaleX:160/image.extent.width,y:160/image.extent.width))
             guard let cg=self.imageContext.createCGImage(image,from:image.extent) else { return }
-            DispatchQueue.main.async { if self.isCurrent(token) { self.backdrop=NSImage(cgImage:cg,size:.zero) } }
+            DispatchQueue.main.async { if self.currentBackdropGeneration()==sourceToken { self.backdrop=NSImage(cgImage:cg,size:.zero) } }
         }
     }
     private func present(_ sample:CMSampleBuffer,point:FramePoint) {

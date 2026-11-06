@@ -1,6 +1,8 @@
 import XCTest
 import CMedia
 import CoreImage
+import AVFoundation
+import Combine
 @testable import Clipper
 
 final class MediaTests:XCTestCase {
@@ -129,6 +131,21 @@ final class MediaTests:XCTestCase {
             XCTAssertEqual(back.time,previous,accuracy:0.000002)
         }
     }
+    func testCachedBackwardStepsAfterVisitingTheLastFrame() throws {
+        for cached in [false,true] {
+            let m=try open(fixture("cfr.mp4")); defer { clip_close(m) }
+            if cached { clip_enable_cache(m) }
+            for t in [0,5.999999,0,1.0/24+0.000002,2.0/24+0.000002,143.0/24] {
+                let s=clip_frame(m,t); if let sample=s.sample { sample.release() }
+            }
+            var t=143.0/24
+            for _ in 0..<4 {
+                let s=clip_frame(m,t-0.000002); if let sample=s.sample { sample.release() }
+                XCTAssertEqual(s.time,t-1.0/24,accuracy:0.000003,"Cache enabled: \(cached)")
+                t=s.time
+            }
+        }
+    }
     @MainActor func testRapidStepsAndMarkWaitForTheRequestedFrame() async throws {
         let editor=Editor()
         editor.open(fixture("cfr.mp4"))
@@ -200,8 +217,53 @@ final class MediaTests:XCTestCase {
         editor.stepFrame(-1)
         try await waitUntil { !editor.comparisonPreparing && !editor.playback.seeking }
         XCTAssertEqual(editor.playback.frame?.time ?? -1,editor.previewStart+editor.previewPosition,accuracy:0.000003)
-        editor.invalidatePreview()
+        editor.stepFrame(1)
+        editor.togglePlayback()
+        try await waitUntil { editor.previewPlaying && editor.canExport }
+        editor.togglePlayback()
+        try await waitUntil { !editor.previewPlaying && !editor.comparisonPreparing }
+        XCTAssertTrue(editor.canExport)
+        let expectedStart=(editor.playback.frame?.time ?? 0)+1.0/24
+        editor.stepFrame(1)
+        editor.markStart()
+        try await waitUntil { editor.previewMode == .original && !editor.playback.seeking }
+        XCTAssertEqual(editor.start?.time ?? -1,expectedStart,accuracy:0.000003)
         XCTAssertEqual(editor.previewMode,.original); XCTAssertFalse(editor.previewReady); XCTAssertNil(editor.previewURL)
+        editor.close()
+    }
+    @MainActor func testRapidBoundaryNudgesCommitEveryFrameAndRejectInvalidMarks() async throws {
+        let editor=Editor(); editor.open(fixture("cfr.mp4"))
+        try await waitUntil { !editor.loading && !editor.playback.seeking }
+        let initialStart=editor.inTime, initialEnd=editor.end!.time
+        editor.nudgeBoundary(start:true,direction:1); editor.nudgeBoundary(start:true,direction:1)
+        try await waitUntil { editor.inTime>=initialStart+2.0/24-0.000001 && !editor.playback.seeking }
+        XCTAssertEqual(editor.inTime,initialStart+2.0/24,accuracy:0.000003)
+        editor.nudgeBoundary(start:false,direction:-1); editor.nudgeBoundary(start:false,direction:-1)
+        try await waitUntil { (editor.end?.time ?? 10)<=initialEnd-2.0/24+0.000001 && !editor.playback.seeking }
+        XCTAssertEqual(editor.end!.time,initialEnd-2.0/24,accuracy:0.000003)
+        editor.markEnd(2.99)
+        try await waitUntil { !editor.playback.seeking }
+        let revision=editor.boundaryRevision, committed=editor.inTime
+        editor.markStart(4)
+        try await waitUntil { !editor.playback.seeking }
+        XCTAssertEqual(editor.inTime,committed); XCTAssertNotNil(editor.error)
+        XCTAssertGreaterThan(editor.boundaryRevision,revision,"A rejected timestamp still refreshes the field to its committed value")
+        editor.close()
+    }
+    @MainActor func testCancelledPreviewRerenderKeepsTheCommittedRange() async throws {
+        let editor=Editor(); editor.open(fixture("cfr.mp4"))
+        try await waitUntil { !editor.loading && !editor.playback.seeking }
+        editor.seek(1); try await waitUntil { !editor.playback.seeking }
+        editor.preview(); try await waitUntil({ !editor.exporting && editor.previewReady },timeout:12)
+        let url=editor.previewURL, start=editor.previewStart, duration=editor.previewDuration
+        editor.seek(4); try await waitUntil { !editor.playback.seeking }
+        editor.preview(); editor.cancel()
+        try await waitUntil { !editor.exporting }
+        XCTAssertEqual(editor.previewURL,url); XCTAssertEqual(editor.previewStart,start); XCTAssertEqual(editor.previewDuration,duration)
+        XCTAssertTrue(editor.previewReady)
+        editor.switchPreviewMode(.compare)
+        try await waitUntil { !editor.comparisonPreparing }
+        XCTAssertEqual(editor.playback.frame?.time ?? -1,editor.previewStart+editor.previewPosition,accuracy:0.000003)
         editor.close()
     }
     @MainActor func testComparisonSurfaceAlignsRoundedCropAndKeepsOneSourceOwner() {
@@ -228,6 +290,25 @@ final class MediaTests:XCTestCase {
         XCTAssertFalse(surface.sourceViewport.isHidden)
         ComparisonSurface.dismantleNSView(surface,coordinator:())
         XCTAssertNil(source.superlayer)
+    }
+    @MainActor func testReal4KQuietChaseKeepsUpWhenProvided() async throws {
+        guard let path=ProcessInfo.processInfo.environment["CLIPPER_SAMPLE"] else { throw XCTSkip("Set CLIPPER_SAMPLE to measure comparison chasing") }
+        let player=Playback()
+        let opened=expectation(description:"The actual 4K source is primed")
+        player.open(URL(fileURLWithPath:path),audioTrack:-1,at:493.5,completion:{ opened.fulfill() })
+        await fulfillment(of:[opened],timeout:10)
+        var updates=0
+        let observation=player.$frame.dropFirst().sink { if $0 != nil { updates += 1 } }
+        for n in 0..<45 {
+            player.chase(493.5+Double(n)/30)
+            XCTAssertFalse(player.seeking)
+            try await Task.sleep(nanoseconds:33_333_333)
+        }
+        let settled=expectation(description:"The final comparison frame is delivered")
+        player.chase(495,completion:{ settled.fulfill() })
+        await fulfillment(of:[settled],timeout:3)
+        XCTAssertGreaterThanOrEqual(updates,18,"The source should deliver at least 12 updates per second")
+        observation.cancel(); player.close()
     }
     func testUserSampleCutWhenProvided() async throws {
         guard let path=ProcessInfo.processInfo.environment["CLIPPER_SAMPLE"] else { throw XCTSkip("Set CLIPPER_SAMPLE to test a real long-GOP 4K source") }
