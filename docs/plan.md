@@ -14,7 +14,7 @@ Export MP4 through hardware H.264 or HEVC only, without software encoder fallbac
 
 Render a five-second encoded preview beginning at the playhead and bounded to the selected clip. Switch between original and output. Invalidate it when the edit changes.
 
-One-click export beside the source with a unique filename; Save As offers another destination. Never overwrite source or existing files. Show progress, cancellation and errors; reveal completed exports in Finder.
+One-click export beside the source with a unique filename; Save As offers another destination and honors the native Replace confirmation for an existing output. Never overwrite the source. Render to a sibling temporary file and publish only after success, preserving the old output on cancellation or failure. This replaces the original blanket no-overwrite policy at the user's explicit request. Show progress, cancellation and errors; reveal completed exports in Finder.
 
 ## Architecture agreement
 

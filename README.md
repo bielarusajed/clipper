@@ -20,7 +20,7 @@ Open `dist/Clipper.app`. The app includes its media engine and needs no Homebrew
 - Floating glass panels hold the left settings and the timeline over one shared window material. The video fills the timeline column width when its aspect ratio allows, and the preview selector aligns with the top of the inspector. The app follows system light/dark appearance. Native glass is used on macOS 26 or newer, with a material fallback on earlier versions.
 - Preview/export stay pinned below the left settings. Close the source with its × button to return to the Open Video empty state.
 - After rendering a preview, choose Compare and drag the wipe to inspect the original crop beside the encoded output. Forward/backward steps align both halves. The episode overview pans the zoomed timeline without changing the clip.
-- Export Clip writes a unique filename beside the source. Its right-hand folder button opens Save As directly. Existing files and the source are never overwritten.
+- Export Clip writes a unique filename beside the source. Its right-hand folder button opens Save As directly and honors macOS's Replace confirmation for an existing output. The source video is protected. Replacement happens only after rendering succeeds; cancelling or a failed render leaves the previous output intact.
 
 ## Build
 

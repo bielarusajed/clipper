@@ -1,5 +1,32 @@
 import Foundation
 
+enum ExportDestination {
+    static func validate(source:URL,destination:URL) throws {
+        let input=source.standardizedFileURL.resolvingSymlinksInPath()
+        let output=destination.standardizedFileURL.resolvingSymlinksInPath()
+        var same=input == output
+        if let a=try? FileManager.default.attributesOfItem(atPath:input.path),
+           let b=try? FileManager.default.attributesOfItem(atPath:output.path),
+           let aDevice=a[.systemNumber] as? NSNumber, let bDevice=b[.systemNumber] as? NSNumber,
+           let aFile=a[.systemFileNumber] as? NSNumber, let bFile=b[.systemFileNumber] as? NSNumber {
+            same = same || (aDevice == bDevice && aFile == bFile)
+        }
+        if same { throw ExportFailure.message("Choose a different filename from the source video.") }
+    }
+
+    /// The encoder writes beside the destination. Publish only a completed file,
+    /// using replacement only when the save panel confirmed an existing output.
+    static func publish(_ temporary:URL,to destination:URL,source:URL,replacingExisting:Bool) throws {
+        try validate(source:source,destination:destination)
+        let files=FileManager.default
+        if replacingExisting && files.fileExists(atPath:destination.path) {
+            _=try files.replaceItemAt(destination,withItemAt:temporary,options:.usingNewMetadataOnly)
+        } else {
+            try files.moveItem(at:temporary,to:destination)
+        }
+    }
+}
+
 struct ExportRequest {
     let source: URL
     let details: MediaDetails

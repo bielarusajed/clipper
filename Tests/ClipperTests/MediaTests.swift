@@ -6,6 +6,72 @@ import Combine
 @testable import Clipper
 
 final class MediaTests:XCTestCase {
+    @MainActor func testSaveAsAcceptsConfirmedExistingOutput() throws {
+        let directory=fixture("replace-validation-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true)
+        defer { try? FileManager.default.removeItem(at:directory) }
+        let source=directory.appendingPathComponent("source.mp4"), output=directory.appendingPathComponent("output.mp4")
+        try Data("source".utf8).write(to:source)
+        try Data("old output".utf8).write(to:output)
+        let validator=ExportSavePanelValidator(source:source)
+        XCTAssertNoThrow(try validator.panel(NSObject(),validate:output),"An existing output must pass the panel's validator after macOS confirms replacement")
+        XCTAssertThrowsError(try validator.panel(NSObject(),validate:source))
+    }
+    func testExportProtectsSourceThroughSymlinksAndHardLinks() throws {
+        let directory=fixture("source-protection-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true)
+        defer { try? FileManager.default.removeItem(at:directory) }
+        let source=directory.appendingPathComponent("source.mp4"), symbolic=directory.appendingPathComponent("symbolic.mp4"), hard=directory.appendingPathComponent("hard.mp4")
+        let original=Data("original source".utf8)
+        try original.write(to:source)
+        try FileManager.default.createSymbolicLink(at:symbolic,withDestinationURL:source)
+        try FileManager.default.linkItem(at:source,to:hard)
+        for destination in [source,symbolic,hard,directory.appendingPathComponent("./source.mp4")] {
+            XCTAssertThrowsError(try ExportDestination.validate(source:source,destination:destination))
+        }
+        XCTAssertEqual(try Data(contentsOf:source),original)
+    }
+    func testPublishingDoesNotReplaceWithoutConsentOrWhenNewFileIsMissing() throws {
+        let directory=fixture("publish-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true)
+        defer { try? FileManager.default.removeItem(at:directory) }
+        let source=directory.appendingPathComponent("source.mp4"), output=directory.appendingPathComponent("output.mp4"), temporary=directory.appendingPathComponent("temporary.mp4")
+        let original=Data("source".utf8), existing=Data("existing output".utf8)
+        try original.write(to:source); try existing.write(to:output)
+        XCTAssertThrowsError(try ExportDestination.publish(temporary,to:output,source:source,replacingExisting:true))
+        XCTAssertEqual(try Data(contentsOf:output),existing)
+        try Data("new output".utf8).write(to:temporary)
+        XCTAssertThrowsError(try ExportDestination.publish(temporary,to:output,source:source,replacingExisting:false))
+        XCTAssertEqual(try Data(contentsOf:output),existing)
+        XCTAssertThrowsError(try ExportDestination.publish(temporary,to:source,source:source,replacingExisting:true))
+        XCTAssertEqual(try Data(contentsOf:source),original)
+    }
+    @MainActor func testConfirmedExportReplacesOnlyAfterSuccessAndCancellationKeepsOutput() async throws {
+        let directory=fixture("replace-export-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true)
+        defer { try? FileManager.default.removeItem(at:directory) }
+        let source=directory.appendingPathComponent("source.mp4"), output=directory.appendingPathComponent("output.mp4")
+        try FileManager.default.copyItem(at:fixture("cfr.mp4"),to:source)
+        let sourceData=try Data(contentsOf:source), previous=Data("previous output".utf8)
+        try previous.write(to:output)
+        let editor=Editor(); editor.open(source)
+        try await waitUntil { !editor.loading && !editor.playback.seeking }
+        editor.markEnd(0.99)
+        try await waitUntil { !editor.playback.seeking }
+        editor.export(to:output,replacingExisting:true)
+        XCTAssertEqual(try Data(contentsOf:output),previous,"The old output remains during rendering")
+        try await waitUntil({ !editor.exporting },timeout:12)
+        XCTAssertNil(editor.error); XCTAssertEqual(editor.lastExport,output)
+        let encoded=try Data(contentsOf:output)
+        XCTAssertNotEqual(encoded,previous)
+        XCTAssertEqual(try frames(output).count,24)
+        editor.export(to:output,replacingExisting:true); editor.cancel()
+        try await waitUntil { !editor.exporting }
+        XCTAssertEqual(try Data(contentsOf:output),encoded,"Cancel must keep the completed previous output")
+        XCTAssertEqual(try Data(contentsOf:source),sourceData)
+        XCTAssertFalse(try FileManager.default.contentsOfDirectory(atPath:directory.path).contains(where:{$0.hasPrefix(".clipper-")}))
+        editor.close()
+    }
     final class ObservedVideoLayer:AVSampleBufferDisplayLayer {
         var imageRemovals=0
         override func flushAndRemoveImage() { imageRemovals += 1; super.flushAndRemoveImage() }

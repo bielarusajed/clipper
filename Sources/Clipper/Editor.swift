@@ -342,19 +342,23 @@ import UniformTypeIdentifiers
     func export(saveAs: Bool = false) {
         guard canExport, let source else { return }
         var destination=uniqueOutput(for:source)
+        var replacingExisting=false
         if saveAs {
             let panel=NSSavePanel(); panel.allowedContentTypes=[.mpeg4Movie]; panel.nameFieldStringValue=destination.lastPathComponent
             panel.directoryURL=source.deletingLastPathComponent()
             panel.canCreateDirectories=true
-            panel.message="Choose a new filename. Existing files are never replaced."
-            let validator=NewExportDestination()
+            let validator=ExportSavePanelValidator(source:source)
             panel.delegate=validator
             guard withExtendedLifetime(validator,{ panel.runModal() }) == .OK, let url=panel.url else { return }; destination=url
-            // Replacing a source or an existing output is intentionally never implicit.
-            if FileManager.default.fileExists(atPath:destination.path) { error="Choose a new filename. Clipper never overwrites existing files."; return }
+            replacingExisting=FileManager.default.fileExists(atPath:destination.path)
         }
-        if destination.standardizedFileURL == source.standardizedFileURL { error="Choose a different filename from the source video."; return }
-        encode(destination:destination,start:inTime,end:outTime,isPreview:false)
+        export(to:destination,replacingExisting:replacingExisting)
+    }
+    func export(to destination:URL,replacingExisting:Bool) {
+        guard canExport, let source else { return }
+        do { try ExportDestination.validate(source:source,destination:destination) }
+        catch { self.error=error.localizedDescription; return }
+        encode(destination:destination,start:inTime,end:outTime,isPreview:false,replacingExisting:replacingExisting)
     }
     func uniqueOutput(for source: URL) -> URL {
         let parent=source.deletingLastPathComponent(), base=source.deletingPathExtension().lastPathComponent
@@ -365,7 +369,7 @@ import UniformTypeIdentifiers
             if !FileManager.default.fileExists(atPath:url.path) { return url }; n += 1
         }
     }
-    private func encode(destination: URL,start: Double,end: Double,isPreview: Bool) {
+    private func encode(destination: URL,start: Double,end: Double,isPreview: Bool,replacingExisting:Bool=false) {
         guard let source, let details else { return }
         stopPreviewTracking(); previewMode = .original; playback.setMuted(edit.muted)
         playback.pause(); outputPlayer.pause()
@@ -382,7 +386,7 @@ import UniformTypeIdentifiers
             do {
                 try await job.run(request) { value in Task { @MainActor in self.progress=value } }
                 if isPreview && token != revision { return }
-                try FileManager.default.moveItem(at:temporary,to:destination)
+                try ExportDestination.publish(temporary,to:destination,source:source,replacingExisting:replacingExisting)
                 if isPreview {
                     if let old=previewURL { try? FileManager.default.removeItem(at:old) }
                     previewStart=start; previewDuration=end-start; previewURL=destination; installPreview(destination)
@@ -396,10 +400,10 @@ import UniformTypeIdentifiers
     func revealExport() { if let lastExport { NSWorkspace.shared.activateFileViewerSelecting([lastExport]) } }
 }
 
-@MainActor private final class NewExportDestination:NSObject,NSOpenSavePanelDelegate {
+@MainActor final class ExportSavePanelValidator:NSObject,NSOpenSavePanelDelegate {
+    let source:URL
+    init(source:URL) { self.source=source }
     func panel(_ sender:Any,validate url:URL) throws {
-        if FileManager.default.fileExists(atPath:url.path) {
-            throw NSError(domain:NSCocoaErrorDomain,code:NSFileWriteFileExistsError,userInfo:[NSLocalizedDescriptionKey:"Choose a new filename. Clipper keeps existing files unchanged."])
-        }
+        try ExportDestination.validate(source:source,destination:url)
     }
 }

@@ -2,6 +2,14 @@
 
 Validated on the user's Apple M1 Pro running macOS 27.0.1 with Xcode 27.2.
 
+## 0.3.1 confirmed output replacement
+
+Save As now honors the native replacement confirmation for an existing output. Its validator only rejects the source video. Source protection checks resolved paths and device/inode identity, including symlinks and hard links, both before encoding and at publication. One-click Export still generates a unique name and does not authorize replacement.
+
+The encoder writes to a unique temporary file beside the output. After successful encoding, a confirmed replacement uses FileManager's same-volume replacement operation. Cancellation and failed encoding never remove the existing output first. A destination created during an export to a new filename is not silently replaced.
+
+The original validator regression was observed failing for an existing, non-source output. Six focused tests then passed with the fix, covering validator acceptance, protection of source aliases, no-consent/missing-temp failure preservation, an actual hardware export replacing the output, immediate cancellation preserving that completed output, preview replacement cancellation, and encoded comparison stepping. Claude reviewed the confirmation gate, source identity checks and publication path and found no blockers.
+
 ## 0.3.0 floating glass adoption
 
 The user selected the native B prototype and authorized applying it to the main app. The production layout removes the study switcher and environment state, the timeline's top rule, and the video's extra horizontal padding. The selector and inspector share a top edge; the video preserves aspect ratio and sits 12 points above the timeline. One window material spans the app, with native glass panels on macOS 26+ and an older-system fallback.
