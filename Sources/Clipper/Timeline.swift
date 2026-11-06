@@ -18,7 +18,11 @@ struct Timeline:View {
             HStack(spacing:7) {
                 keyHint("I","Set start")
                 keyHint("O","Set end")
-                keyHint("← →","Step a frame")
+                HStack(spacing:4) {
+                    Button { editor.stepFrame(-1) } label: { keycap("←") }.help("Previous frame (←)")
+                    Button { editor.stepFrame(1) } label: { keycap("→") }.help("Next frame (→)")
+                    Text("Step a frame").font(.system(size:9)).foregroundStyle(C1.muted)
+                }.buttonStyle(.plain)
                 Spacer()
                 Image(systemName:"minus.magnifyingglass")
                 Slider(value:$editor.timelineZoom,in:0...editor.maximumTimelineZoom).frame(width:115).controlSize(.mini).help("Zoom the timeline (⌘+/⌘− or pinch)")
@@ -28,12 +32,15 @@ struct Timeline:View {
     }
     private func keyHint(_ key:String,_ action:String)->some View {
         HStack(spacing:4) {
-            Text(key).font(.system(size:9,weight:.medium,design:.monospaced)).foregroundStyle(C1.secondary)
-                .padding(.horizontal,4).padding(.vertical,2)
-                .background(.white,in:RoundedRectangle(cornerRadius:3))
-                .overlay(RoundedRectangle(cornerRadius:3).stroke(C1.line,lineWidth:1))
+            keycap(key)
             Text(action).font(.system(size:9)).foregroundStyle(C1.muted)
         }.accessibilityElement(children:.combine)
+    }
+    private func keycap(_ key:String)->some View {
+        Text(key).font(.system(size:9,weight:.medium,design:.monospaced)).foregroundStyle(C1.secondary)
+            .padding(.horizontal,4).padding(.vertical,2)
+            .background(.white,in:RoundedRectangle(cornerRadius:3))
+            .overlay(RoundedRectangle(cornerRadius:3).stroke(C1.line,lineWidth:1))
     }
     private var overview:some View {
         VStack(spacing:3) {
