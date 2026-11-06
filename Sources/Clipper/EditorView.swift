@@ -24,6 +24,7 @@ struct EditorView:View {
         .foregroundStyle(C1.ink)
         .tint(C1.blue)
         .background(WindowAppearance().frame(width:0,height:0))
+        .background(WindowPasteHandler(editor:editor).frame(width:0,height:0))
         .navigationTitle(editor.source?.lastPathComponent ?? "Clipper")
         .overlay {
             if dropping { RoundedRectangle(cornerRadius:10).stroke(C1.blue,lineWidth:3).padding(4).allowsHitTesting(false) }
@@ -41,6 +42,12 @@ struct EditorView:View {
         .onChange(of:editor.boundaryRevision) { _,_ in
             if editor.lastBoundaryIsStart { startText=TimeText.format(editor.inTime) }
             else { endText=TimeText.format(editor.end?.time ?? 0) }
+        }
+        .sheet(isPresented:$editor.importPresented) {
+            URLImportView(importer:editor.urlImporter) { download in
+                editor.importPresented=false
+                editor.open(download.file,temporary:download)
+            }
         }
         .alert("Clipper",isPresented:Binding(get:{editor.error != nil || playback.error != nil},set:{if !$0 {editor.error=nil;playback.error=nil}})) {
             Button("OK") { editor.error=nil; playback.error=nil }
@@ -297,8 +304,9 @@ struct EditorView:View {
                 Image(systemName:"film.stack").font(.system(size:34,weight:.light)).foregroundStyle(C1.blue)
                     .frame(width:72,height:72).modifier(GlassPanel(radius:20))
                 Text("Clip a moment from a video").font(.system(size:20,weight:.semibold))
-                Text("Drop a file anywhere in this window,\nor choose a video to start trimming.").multilineTextAlignment(.center).font(.system(size:12)).foregroundStyle(C1.secondary).lineSpacing(4)
+                Text("Drop or paste a video file,\nor paste a URL to download.").multilineTextAlignment(.center).font(.system(size:12)).foregroundStyle(C1.secondary).lineSpacing(4)
                 Button("Open Video…") { editor.openPanel() }.buttonStyle(C1ButtonStyle(primary:true)).frame(width:146)
+                Button("Import URL…") { editor.showURLImporter() }.buttonStyle(C1ButtonStyle()).frame(width:146)
                 Text("MP4, MOV, WebM, MKV and AVI").font(.system(size:10)).foregroundStyle(C1.muted).padding(.top,2)
             }
         }.frame(maxWidth:.infinity,maxHeight:.infinity)

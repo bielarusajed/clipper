@@ -13,3 +13,12 @@ https://github.com/sekrit-twc/zimg
 These libraries are dynamically linked. The build scripts and corresponding
 source archives are distributed alongside the app. Modified library builds may
 be substituted; the modified app must then be signed again for local use.
+
+URL imports download yt-dlp and Deno on demand from official GitHub releases.
+These tools are stored outside the app and updated independently of Clipper.
+yt-dlp: https://github.com/yt-dlp/yt-dlp (Unlicense; release executables also
+contain third-party Python components under their respective licenses).
+https://github.com/yt-dlp/yt-dlp/blob/master/THIRD_PARTY_LICENSES.txt
+Deno: https://github.com/denoland/deno (MIT; includes third-party components).
+https://github.com/denoland/deno/blob/main/LICENSE.md
+https://github.com/denoland/deno/blob/main/third_party/README.md

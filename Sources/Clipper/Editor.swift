@@ -5,6 +5,9 @@ import UniformTypeIdentifiers
 
 @MainActor final class Editor: ObservableObject {
     let playback=Playback()
+    let urlImporter=URLImport()
+    @Published var importPresented=false
+    private var temporarySource:TemporaryImport?
     @Published var source: URL?
     @Published var edit=EditSettings()
     @Published var start: FramePoint?
@@ -54,7 +57,7 @@ import UniformTypeIdentifiers
     var inTime: Double { start?.time ?? 0 }
     var outTime: Double { min(end?.end ?? details?.duration ?? 0,details?.duration ?? 0) }
     var clipDuration: Double { max(0,outTime-inTime) }
-    var canExport: Bool { source != nil && start != nil && end != nil && clipDuration > 0 && !loading && !playback.seeking && !previewStepRunning && !exporting }
+    var canExport: Bool { source != nil && start != nil && end != nil && clipDuration > 0 && !loading && !playback.seeking && !previewStepRunning && !exporting && !importPresented }
 
     init() {
         outputPlayer.actionAtItemEnd = .pause
@@ -65,14 +68,32 @@ import UniformTypeIdentifiers
         if let previewEndObserver { NotificationCenter.default.removeObserver(previewEndObserver) }
     }
 
+    var canPasteImport:Bool { !exporting && !importPresented && !urlImporter.busy }
+    func paste(_ input:ClipboardImport) {
+        guard canPasteImport else { return }
+        switch input {
+        case .file(let url): open(url)
+        case .web(let url): showURLImporter(url:url)
+        }
+    }
+    func showURLImporter(url:URL?=nil) {
+        guard !exporting, !importPresented else { return }
+        urlImporter.begin(url:url)
+        playback.pause(); outputPlayer.pause(); importPresented=true
+    }
     func openPanel() {
+        guard !urlImporter.busy else { return }
         let panel=NSOpenPanel()
         panel.allowedContentTypes=[.movie,.video,.mpeg4Movie,.quickTimeMovie,UTType(filenameExtension:"mkv") ?? .data,UTType(filenameExtension:"webm") ?? .data,UTType(filenameExtension:"avi") ?? .data]
         panel.allowsMultipleSelection=false; panel.canChooseDirectories=false
         if panel.runModal() == .OK, let url=panel.url { open(url) }
     }
-    func open(_ url: URL) {
+    func open(_ url: URL, temporary:TemporaryImport?=nil) {
+        guard !urlImporter.busy else { error="Finish or cancel the URL import before opening another video."; return }
         guard !exporting else { error="Finish or cancel the current export before opening another video."; return }
+        let previous=temporarySource
+        temporarySource=temporary
+        defer { if let previous { playback.queue.async { withExtendedLifetime(previous) {} } } }
         cancelNudges(); timelineZoom=0
         let id=UUID(); loadingID=id; loading=true
         invalidatePreview(); source=url; start=nil; end=nil; edit=EditSettings(); error=nil; lastExport=nil; nextOutputURL=uniqueOutput(for:url)
@@ -96,11 +117,18 @@ import UniformTypeIdentifiers
         }
     }
     func close() {
-        guard !exporting else { return }
+        guard !exporting, !urlImporter.busy else { return }
         cancelNudges()
         loadingID=UUID(); loading=false
         invalidatePreview(); playback.close()
+        let previous=temporarySource; temporarySource=nil
+        if let previous { playback.queue.async { withExtendedLifetime(previous) {} } }
         source=nil; start=nil; end=nil; edit=EditSettings(); lastExport=nil; nextOutputURL=nil; error=nil
+    }
+    func prepareToQuit() {
+        let download=temporarySource
+        close()
+        download?.dispose()
     }
     func nudgeBoundary(start:Bool,direction:Int) {
         guard !loading, !exporting else { return }
@@ -343,9 +371,9 @@ import UniformTypeIdentifiers
         guard canExport, let source else { return }
         var destination=uniqueOutput(for:source)
         var replacingExisting=false
-        if saveAs {
+        if saveAs || temporarySource != nil {
             let panel=NSSavePanel(); panel.allowedContentTypes=[.mpeg4Movie]; panel.nameFieldStringValue=destination.lastPathComponent
-            panel.directoryURL=source.deletingLastPathComponent()
+            panel.directoryURL=destination.deletingLastPathComponent()
             panel.canCreateDirectories=true
             let validator=ExportSavePanelValidator(source:source)
             panel.delegate=validator
@@ -361,7 +389,10 @@ import UniformTypeIdentifiers
         encode(destination:destination,start:inTime,end:outTime,isPreview:false,replacingExisting:replacingExisting)
     }
     func uniqueOutput(for source: URL) -> URL {
-        let parent=source.deletingLastPathComponent(), base=source.deletingPathExtension().lastPathComponent
+        let parent=temporarySource?.file == source
+            ? FileManager.default.urls(for:.downloadsDirectory,in:.userDomainMask)[0]
+            : source.deletingLastPathComponent()
+        let base=source.deletingPathExtension().lastPathComponent
         var n=1
         while true {
             let name=n == 1 ? "\(base)-clip.mp4" : "\(base)-clip-\(n).mp4"
@@ -381,7 +412,7 @@ import UniformTypeIdentifiers
         Task {
             defer {
                 exporting=false; encoder=nil; try? FileManager.default.removeItem(at:temporary)
-                if quitAfterExport { invalidatePreview(); NSApp.reply(toApplicationShouldTerminate:true) }
+                if quitAfterExport { invalidatePreview(); prepareToQuit(); NSApp.reply(toApplicationShouldTerminate:true) }
             }
             do {
                 try await job.run(request) { value in Task { @MainActor in self.progress=value } }

@@ -16,6 +16,7 @@ import AppKit
         .commands {
             CommandGroup(replacing:.newItem) {
                 Button("Open Video…") { editor.openPanel() }.keyboardShortcut("o").disabled(editor.exporting)
+                Button("Import URL…") { editor.showURLImporter() }.keyboardShortcut("o",modifiers:[.command,.shift]).disabled(editor.exporting)
                 Button("Close Video") { editor.close() }.keyboardShortcut("w",modifiers:[.command,.shift]).disabled(editor.source == nil || editor.exporting)
             }
             CommandGroup(after:.saveItem) {
@@ -45,13 +46,13 @@ import AppKit
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular); NSApp.activate(ignoringOtherApps:true)
         keyMonitor=NSEvent.addLocalMonitorForEvents(matching:.keyDown) { [weak self] event in
-            if let editor=self?.editor, editor.source != nil, !(NSApp.keyWindow is NSPanel),
+            if let editor=self?.editor, !editor.importPresented, editor.source != nil, !(NSApp.keyWindow is NSPanel),
                event.modifierFlags.intersection([.command,.control,.option]) == .command,
                ["+","=","-"].contains(event.charactersIgnoringModifiers ?? "") {
                 editor.zoomTimeline(by:event.charactersIgnoringModifiers == "-" ? -0.5 : 0.5)
                 return nil
             }
-            guard let editor=self?.editor, !editor.loading, !editor.exporting, editor.details != nil,
+            guard let editor=self?.editor, !editor.importPresented, !editor.loading, !editor.exporting, editor.details != nil,
                   !(NSApp.keyWindow is NSPanel),
                   !(NSApp.keyWindow?.firstResponder is NSTextView),
                   !(NSApp.keyWindow?.firstResponder is NSControl),
@@ -75,12 +76,19 @@ import AppKit
     func deliverPending() { if let url=pending.first { pending=[]; editor?.open(url) } }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender:NSApplication) -> Bool { true }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if editor?.urlImporter.busy == true {
+            let alert=NSAlert(); alert.messageText="Cancel the URL import and quit?"
+            alert.addButton(withTitle:"Keep Importing"); alert.addButton(withTitle:"Cancel and Quit")
+            if alert.runModal() == .alertFirstButtonReturn { return .terminateCancel }
+            Task { await editor?.urlImporter.cancelAndWait(); editor?.prepareToQuit(); NSApp.reply(toApplicationShouldTerminate:true) }
+            return .terminateLater
+        }
         if editor?.exporting == true {
             let alert=NSAlert(); alert.messageText="Cancel the export and quit?"; alert.addButton(withTitle:"Keep Exporting"); alert.addButton(withTitle:"Cancel and Quit")
             if alert.runModal() == .alertFirstButtonReturn { return .terminateCancel }
             editor?.cancelAndQuit()
             return .terminateLater
         }
-        editor?.invalidatePreview(); return .terminateNow
+        editor?.prepareToQuit(); return .terminateNow
     }
 }
