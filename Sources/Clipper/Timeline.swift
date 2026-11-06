@@ -7,17 +7,48 @@ struct Timeline:View {
     @ObservedObject var editor:Editor
     @ObservedObject var playback:Playback
     @State private var zoom=0.0
+    @State private var visibleStart=0.0
+    @State private var visibleEnd=0.0
+    @State private var panTarget:Double?
     var body:some View {
         VStack(spacing:6) {
-            TimelineSurface(editor:editor,position:playback.position,zoom:pow(2,zoom),busy:playback.playing || playback.seeking)
-            HStack {
-                Button("Fit") { zoom=0 }.controlSize(.mini)
+            overview
+            TimelineSurface(editor:editor,position:editor.displayedPosition,zoom:pow(2,zoom),busy:playback.playing || playback.seeking || editor.previewPlaying || editor.comparisonPreparing,panTarget:panTarget) { start,end in
+                visibleStart=start; visibleEnd=end
+            }.frame(height:84)
+            HStack(spacing:7) {
+                Button("Fit") { zoom=0 }.buttonStyle(.plain).font(.system(size:9))
                 Spacer()
-                Image(systemName:"minus.magnifyingglass").foregroundStyle(.secondary)
-                Slider(value:$zoom,in:0...max(0.01,min(16,log2(max(1,min(8_000_000,(editor.details?.duration ?? 1)*(editor.details?.fps ?? 30)*150)/1000))))).frame(width:160).help("Zoom the timeline for precise edits")
-                Image(systemName:"plus.magnifyingglass").foregroundStyle(.secondary)
-            }
-        }.onChange(of:editor.source) { _,_ in zoom=0 }
+                Image(systemName:"minus.magnifyingglass")
+                Slider(value:$zoom,in:0...max(0.01,min(16,log2(max(1,min(8_000_000,(editor.details?.duration ?? 1)*(editor.details?.fps ?? 30)*150)/1000))))).frame(width:115).controlSize(.mini).help("Zoom the timeline for precise edits")
+                Image(systemName:"plus.magnifyingglass")
+            }.font(.system(size:9)).foregroundStyle(C1.muted).frame(height:16)
+        }.onChange(of:editor.source) { _,_ in zoom=0; visibleStart=0; visibleEnd=0; panTarget=nil }
+    }
+    private var overview:some View {
+        VStack(spacing:3) {
+            GeometryReader { geometry in
+                let duration=max(0.001,editor.details?.duration ?? 1), width=geometry.size.width
+                let range=max(0,visibleEnd-visibleStart), windowWidth=min(width,max(5,width*range/duration))
+                ZStack(alignment:.leading) {
+                    RoundedRectangle(cornerRadius:3).fill(C1.line.opacity(0.65))
+                    RoundedRectangle(cornerRadius:2).fill(C1.blue.opacity(0.06)).overlay(RoundedRectangle(cornerRadius:2).stroke(C1.secondary.opacity(0.25),lineWidth:0.6))
+                        .frame(width:windowWidth).offset(x:max(0,min(width-windowWidth,width*visibleStart/duration)))
+                    RoundedRectangle(cornerRadius:1).fill(C1.amber).frame(width:max(2,width*editor.clipDuration/duration),height:5).offset(x:width*editor.inTime/duration)
+                }
+                .contentShape(Rectangle())
+                .gesture(DragGesture(minimumDistance:0).onChanged { value in panTarget=max(0,min(duration,value.location.x/width*duration)) }.onEnded { _ in panTarget=nil })
+                .accessibilityLabel("Episode overview")
+                .accessibilityHint("Click or drag to move the detailed timeline")
+            }.frame(height:9)
+            HStack {
+                Text("00:00")
+                Spacer()
+                Text("Whole video")
+                Spacer()
+                Text(TimeText.format(editor.details?.duration ?? 0).dropLast(4))
+            }.font(.system(size:8)).foregroundStyle(C1.muted).monospacedDigit()
+        }
     }
 }
 struct TimelineSurface:NSViewRepresentable {
@@ -25,34 +56,66 @@ struct TimelineSurface:NSViewRepresentable {
     var position:Double
     var zoom:Double
     var busy:Bool
-    func makeNSView(context:Context) -> NSScrollView {
+    var panTarget:Double?
+    var onViewport:(Double,Double)->Void
+    func makeCoordinator()->Coordinator { Coordinator(onViewport:onViewport) }
+    func makeNSView(context:Context)->NSScrollView {
         let scroll=NSScrollView()
-        scroll.hasHorizontalScroller=true; scroll.hasVerticalScroller=false; scroll.autohidesScrollers=false
-        scroll.drawsBackground=false
-        let view=TimelineCanvas(frame:CGRect(x:0,y:0,width:800,height:76))
+        scroll.hasHorizontalScroller=true; scroll.hasVerticalScroller=false
+        scroll.autohidesScrollers=true; scroll.scrollerStyle = .overlay
+        scroll.drawsBackground=false; scroll.verticalScrollElasticity = .none
+        let view=TimelineCanvas(frame:CGRect(x:0,y:0,width:800,height:84))
         scroll.documentView=view
         view.seek={ editor.seek($0) }; view.setStart={ editor.markStart($0) }; view.setEnd={ editor.markEnd($0) }
+        context.coordinator.observe(scroll)
         return scroll
     }
     func updateNSView(_ scroll:NSScrollView,context:Context) {
         guard let view=scroll.documentView as? TimelineCanvas else { return }
+        context.coordinator.onViewport=onViewport
         let duration=editor.details?.duration ?? 1
         let width=min(8_000_000,max(100,scroll.contentSize.width)*zoom)
-        let changed=abs(view.frame.width-width) > 1
-        let priorWidth=max(1,view.frame.width)
-        let center=scroll.contentView.bounds.midX/priorWidth
+        let changed=abs(view.frame.width-width)>1
+        let center=scroll.contentView.bounds.midX/max(1,view.frame.width)
+        let moved=abs(view.position-position)>0.000001
         view.duration=duration; view.start=editor.inTime; view.end=editor.outTime; view.position=position
-        view.enabled = !editor.exporting
-        view.setBusy(busy)
-        view.setFrameSize(CGSize(width:width,height:76))
-        view.setSource(editor.source)
-        if changed {
-            let fraction=zoom > view.zoom ? position/max(0.001,duration) : center
-            scroll.contentView.scroll(to:CGPoint(x:max(0,min(width-scroll.contentSize.width,fraction*width-scroll.contentSize.width/2)),y:0))
-            scroll.reflectScrolledClipView(scroll.contentView)
+        view.enabled = !editor.exporting && !editor.loading
+        view.setBusy(busy); view.setFrameSize(CGSize(width:width,height:84)); view.setSource(editor.source)
+        var target:Double?
+        if changed { target=zoom>view.zoom ? position : center*duration }
+        if let panTarget, context.coordinator.lastPan != panTarget { target=panTarget }
+        context.coordinator.lastPan=panTarget
+        let playhead=position/max(0.001,duration)*width
+        if moved, panTarget == nil, !busy, (playhead<scroll.contentView.bounds.minX || playhead>scroll.contentView.bounds.maxX) { target=position }
+        if let target {
+            let x=max(0,min(width-scroll.contentSize.width,target/max(0.001,duration)*width-scroll.contentSize.width/2))
+            scroll.contentView.scroll(to:CGPoint(x:x,y:0)); scroll.reflectScrolledClipView(scroll.contentView)
         }
-        view.zoom=zoom
-        view.needsDisplay=true
+        view.zoom=zoom; view.needsDisplay=true
+        context.coordinator.report()
+    }
+    final class Coordinator {
+        var onViewport:(Double,Double)->Void
+        weak var scroll:NSScrollView?
+        var observer:NSObjectProtocol?
+        var lastPan:Double?
+        private var reportedStart = -1.0
+        private var reportedEnd = -1.0
+        init(onViewport:@escaping(Double,Double)->Void) { self.onViewport=onViewport }
+        func observe(_ scroll:NSScrollView) {
+            self.scroll=scroll; scroll.contentView.postsBoundsChangedNotifications=true
+            observer=NotificationCenter.default.addObserver(forName:NSView.boundsDidChangeNotification,object:scroll.contentView,queue:.main) { [weak self] _ in self?.report() }
+        }
+        func report() {
+            guard let scroll, let view=scroll.documentView as? TimelineCanvas, view.bounds.width>0 else { return }
+            let start=max(0,scroll.contentView.bounds.minX/view.bounds.width*view.duration)
+            let end=min(view.duration,scroll.contentView.bounds.maxX/view.bounds.width*view.duration)
+            guard abs(start-reportedStart)>0.0001 || abs(end-reportedEnd)>0.0001 else { return }
+            reportedStart=start; reportedEnd=end
+            view.viewportMoved()
+            DispatchQueue.main.async { [weak self] in self?.onViewport(start,end) }
+        }
+        deinit { if let observer { NotificationCenter.default.removeObserver(observer) } }
     }
 }
 final class TimelineCanvas:NSView {
@@ -73,6 +136,12 @@ final class TimelineCanvas:NSView {
     private let ci=CIContext(options:[.cacheIntermediates:false])
     private let cancellation=clip_request_create()!
     private var busy=false
+    private var viewportOrigin=Double.nan
+    func viewportMoved() {
+        if !viewportOrigin.isFinite || abs(visibleRect.minX-viewportOrigin)>visibleRect.width/2 {
+            viewportOrigin=visibleRect.minX; generation += 1; pending=[]; clip_request_set(cancellation,Int32(generation))
+        }
+    }
     func setBusy(_ value:Bool) {
         if value && !busy { generation += 1; pending=[]; clip_request_set(cancellation,Int32(generation)) }
         busy=value
@@ -90,7 +159,7 @@ final class TimelineCanvas:NSView {
     private func x(_ t:Double)->Double { t/max(duration,0.001)*bounds.width }
     private func time(_ x:Double)->Double { max(0,min(duration-0.000001,x/bounds.width*duration)) }
     override func draw(_ dirtyRect:NSRect) {
-        NSColor.controlBackgroundColor.setFill(); dirtyRect.fill()
+        NSColor(calibratedRed:0.97,green:0.98,blue:0.995,alpha:1).setFill(); dirtyRect.fill()
         guard duration > 0 else { return }
         let visible=visibleRect.insetBy(dx:-100,dy:0).intersection(bounds)
         let span=duration/bounds.width*100
@@ -119,18 +188,18 @@ final class TimelineCanvas:NSView {
             }
         }
         let left=x(start), right=x(end)
-        NSColor.black.withAlphaComponent(0.48).setFill()
+        NSColor(calibratedRed:0.97,green:0.98,blue:0.995,alpha:0.64).setFill()
         CGRect(x:0,y:24,width:left,height:45).intersection(dirtyRect).fill()
         CGRect(x:right,y:24,width:max(0,bounds.width-right),height:45).intersection(dirtyRect).fill()
-        NSColor.controlAccentColor.setStroke()
+        C1.selection.setStroke()
         let selection=NSBezierPath(rect:CGRect(x:left,y:23,width:max(2,right-left),height:47)); selection.lineWidth=2; selection.stroke()
         for xx in [left,right] where xx >= visible.minX-5 && xx <= visible.maxX+5 {
-            NSColor.controlAccentColor.setFill(); NSBezierPath(roundedRect:CGRect(x:xx-4,y:22,width:8,height:49),xRadius:2,yRadius:2).fill()
+            C1.selection.setFill(); NSBezierPath(roundedRect:CGRect(x:xx-4,y:22,width:8,height:49),xRadius:2,yRadius:2).fill()
             NSColor.white.withAlphaComponent(0.8).setFill(); CGRect(x:xx-0.5,y:37,width:1,height:18).fill()
         }
         let playhead=x(position)
-        NSColor.labelColor.setStroke(); let line=NSBezierPath(); line.move(to:CGPoint(x:playhead,y:19)); line.line(to:CGPoint(x:playhead,y:74)); line.lineWidth=1.5; line.stroke()
-        NSColor.labelColor.setFill(); let tip=NSBezierPath(); tip.move(to:CGPoint(x:playhead-4,y:18)); tip.line(to:CGPoint(x:playhead+4,y:18)); tip.line(to:CGPoint(x:playhead,y:23)); tip.close(); tip.fill()
+        C1.playhead.setStroke(); let line=NSBezierPath(); line.move(to:CGPoint(x:playhead,y:19)); line.line(to:CGPoint(x:playhead,y:74)); line.lineWidth=1.5; line.stroke()
+        C1.playhead.setFill(); let tip=NSBezierPath(); tip.move(to:CGPoint(x:playhead-4,y:18)); tip.line(to:CGPoint(x:playhead+4,y:18)); tip.line(to:CGPoint(x:playhead,y:23)); tip.close(); tip.fill()
     }
     private func fetch(_ time:Double,key:Int) {
         guard !busy, !pending.contains(key), pending.count < 16 else { return }

@@ -1,228 +1,311 @@
 import SwiftUI
 import AVKit
 
-struct EditorView: View {
-    @ObservedObject var editor: Editor
-    @ObservedObject var playback: Playback
+struct EditorView:View {
+    @ObservedObject var editor:Editor
+    @ObservedObject var playback:Playback
     @State private var dropping=false
     @State private var startText=""
     @State private var endText=""
-    var body: some View {
-        VStack(spacing:0) {
-            if let details=playback.details, editor.source != nil {
+
+    var body:some View {
+        Group {
+            if editor.source != nil {
                 HStack(spacing:0) {
+                    sidebar.frame(width:288)
                     VStack(spacing:0) {
                         Viewer(editor:editor,playback:playback)
                             .frame(maxWidth:.infinity,maxHeight:.infinity)
-                        transport
+                        timelineDeck
                     }
-                    Divider()
-                    inspector(details).frame(width:258)
                 }
-                Divider()
-                VStack(spacing:12) {
-                    HStack(spacing:16) {
-                        timeField("Start",text:$startText,value:editor.inTime,commit:editor.markStart)
-                        Button { editor.markStart() } label: { Image(systemName:"i.square") }.help("Set start at this frame (I)")
-                        timeField("End",text:$endText,value:editor.end?.time ?? 0,commit:editor.markEnd)
-                        Button { editor.markEnd() } label: { Image(systemName:"o.square") }.help("Include this frame as the end (O)")
-                        Spacer()
-                        Text("\(TimeText.format(editor.clipDuration)) selected").monospacedDigit().foregroundStyle(.secondary)
-                    }.controlSize(.small)
-                    Timeline(editor:editor,playback:playback).frame(height:110)
-                }.padding(16).disabled(editor.exporting || editor.loading)
-            } else { empty }
-            Divider()
-            footer
+            } else { emptyState }
         }
-        .background(Color(nsColor:.windowBackgroundColor))
-        .overlay { if dropping { RoundedRectangle(cornerRadius:8).stroke(Color.accentColor,lineWidth:3).padding(4).allowsHitTesting(false) } }
+        .background(C1.paper)
+        .foregroundStyle(C1.ink)
+        .tint(C1.blue)
+        .preferredColorScheme(.light)
+        .background(WindowAppearance().frame(width:0,height:0))
+        .navigationTitle(editor.source?.lastPathComponent ?? "Clipper")
+        .overlay {
+            if dropping { RoundedRectangle(cornerRadius:10).stroke(C1.blue,lineWidth:3).padding(4).allowsHitTesting(false) }
+        }
         .onDrop(of:[.fileURL],isTargeted:$dropping) { providers in
             guard !editor.exporting, let provider=providers.first else { return false }
-            _=provider.loadObject(ofClass:URL.self) { url,_ in if let url { Task { @MainActor in editor.open(url) } } }; return true
-        }
-        .toolbar {
-            ToolbarItem(placement:.navigation) { Button { editor.openPanel() } label: { Label("Open",systemImage:"folder") }.disabled(editor.exporting) }
-            ToolbarItem(placement:.principal) {
-                VStack(spacing:2) {
-                    Text(editor.source?.lastPathComponent ?? "Clipper").font(.headline).lineLimit(1)
-                    if let d=playback.details { Text("\(Int(d.displaySize.width)) × \(Int(d.displaySize.height))  \(d.codec.uppercased())\(d.hdr ? "  HDR" : "")").font(.caption).foregroundStyle(.secondary) }
-                }.frame(minWidth:240).fixedSize()
+            _=provider.loadObject(ofClass:URL.self) { url,_ in
+                if let url { Task { @MainActor in editor.open(url) } }
             }
+            return true
         }
         .onChange(of:editor.edit) { old,_ in editor.settingsChanged(old) }
         .onChange(of:editor.start) { _,_ in startText=TimeText.format(editor.inTime) }
         .onChange(of:editor.end) { _,value in endText=TimeText.format(value?.time ?? 0) }
-        .alert("Clipper",isPresented:Binding(get:{ editor.error != nil || playback.error != nil },set:{ if !$0 { editor.error=nil; playback.error=nil } })) {
+        .alert("Clipper",isPresented:Binding(get:{editor.error != nil || playback.error != nil},set:{if !$0 {editor.error=nil;playback.error=nil}})) {
             Button("OK") { editor.error=nil; playback.error=nil }
         } message: { Text(editor.error ?? playback.error ?? "") }
     }
-    private var empty: some View {
-        VStack(spacing:18) {
-            Image(systemName:"film.stack").font(.system(size:48,weight:.light)).foregroundStyle(.secondary)
-            Text("Drop a video to make a clip").font(.title2.weight(.medium))
-            Text("MP4, MOV, WebM, MKV and AVI").foregroundStyle(.secondary)
-            Button("Open Video…") { editor.openPanel() }.buttonStyle(.borderedProminent).controlSize(.large)
-            if playback.seeking { ProgressView("Opening video…").controlSize(.small) }
-        }.frame(maxWidth:.infinity,maxHeight:.infinity)
-    }
-    private var transport: some View {
-        HStack(spacing:18) {
-            Text(TimeText.format(playback.position)).font(.system(.body,design:.monospaced)).frame(width:124,alignment:.leading)
-            Spacer()
-            Button { editor.returnToOriginal(); playback.step(-1) } label: { Image(systemName:"backward.frame") }.help("Previous frame (←)")
-            Button { editor.togglePlayback() } label: { Image(systemName:(editor.showOutput ? editor.outputPlayer.rate > 0 : playback.playing) ? "pause.fill" : "play.fill").frame(width:18) }.help("Play / pause (Space)")
-            Button { editor.returnToOriginal(); playback.step(1) } label: { Image(systemName:"forward.frame") }.help("Next frame (→)")
-            Spacer()
-            if playback.seeking { ProgressView().controlSize(.small).frame(width:124,alignment:.trailing) }
-            else if editor.previewURL != nil {
-                Picker("Preview",selection:Binding(get:{editor.showOutput},set:editor.switchPreview)) { Text("Original").tag(false); Text("Output").tag(true) }.pickerStyle(.segmented).frame(width:150)
-            } else { Text("Frame preview").font(.caption).foregroundStyle(.secondary).frame(width:124,alignment:.trailing) }
-        }.buttonStyle(.borderless).padding(.horizontal,18).frame(height:48).disabled(editor.loading)
-    }
-    private func timeField(_ title:String,text:Binding<String>,value:Double,commit:@escaping (Double?)->Void) -> some View {
-        HStack(spacing:8) {
-            Text(title).foregroundStyle(.secondary)
-            TextField(title,text:text).font(.system(.body,design:.monospaced)).frame(width:125)
-                .onSubmit { if text.wrappedValue == TimeText.format(value) { return }; if let time=TimeText.parse(text.wrappedValue) { commit(time) } else { text.wrappedValue=TimeText.format(value); editor.error="Enter seconds or a time such as 00:01:23.450." } }
-        }
-    }
-    private func inspector(_ details:MediaDetails) -> some View {
-        ScrollView {
-            VStack(alignment:.leading,spacing:20) {
-                VStack(alignment:.leading,spacing:12) {
-                    Text("Framing").font(.headline)
-                    Picker("Crop",selection:$editor.edit.cropPreset) { ForEach(CropPreset.allCases) { Text($0.rawValue).tag($0) } }
-                    if editor.edit.cropPreset == .custom {
-                        HStack {
-                            TextField("Width",value:$editor.edit.customWidth,format:.number).frame(width:72)
-                            Text(":").foregroundStyle(.secondary)
-                            TextField("Height",value:$editor.edit.customHeight,format:.number).frame(width:72)
-                        }.textFieldStyle(.roundedBorder)
-                    }
-                    if editor.edit.cropPreset != .original { Text("Drag the crop to reframe. Drag its corner to resize.").font(.caption).foregroundStyle(.secondary) }
-                    Picker("Resolution",selection:$editor.edit.resolution) { ForEach(Resolution.allCases) { Text($0.rawValue).tag($0) } }
-                    let g=editor.edit.geometry(for:details)
-                    Text("Output: \(g.outWidth) × \(g.outHeight)").font(.caption).monospacedDigit().foregroundStyle(.secondary)
-                }
-                Divider()
-                VStack(alignment:.leading,spacing:12) {
-                    Text("Video").font(.headline)
-                    Picker("Codec",selection:$editor.edit.codec) { ForEach(VideoCodec.allCases) { Text($0.rawValue).tag($0) } }.disabled(details.hdr && !editor.edit.convertToSDR)
-                    if details.hdr { Toggle("Convert to SDR",isOn:$editor.edit.convertToSDR); Text(editor.edit.convertToSDR ? "Tone-mapped for SDR displays." : "HDR is kept with 10-bit H.265.").font(.caption).foregroundStyle(.secondary) }
-                    Text("Quality").font(.subheadline)
-                    Slider(value:$editor.edit.quality,in:20...95,step:1)
-                    HStack { Text("Smaller file"); Spacer(); Text("Higher quality") }.font(.caption).foregroundStyle(.secondary)
-                }
-                Divider()
-                VStack(alignment:.leading,spacing:12) {
-                    Text("Audio").font(.headline)
-                    if !details.audioLabels.isEmpty {
-                        if details.audioLabels.count > 1 { Picker("Track",selection:$editor.edit.audioTrack) { ForEach(details.audioLabels.indices,id:\.self) { Text(details.audioLabels[$0]).tag($0) } }.labelsHidden() }
-                        Toggle("Mute clip",isOn:$editor.edit.muted)
-                    } else { Text("No audio track").foregroundStyle(.secondary).font(.callout) }
-                }
-                Divider()
-                Button { editor.preview() } label: { Label("Preview 5 Seconds",systemImage:"play.rectangle") }.disabled(!editor.canExport).frame(maxWidth:.infinity)
-                Text("Render a sample with these settings to check the quality.").font(.caption).foregroundStyle(.secondary)
-            }.padding(20)
-        }.disabled(editor.exporting || editor.loading)
-    }
-    private var footer: some View {
-        HStack(spacing:12) {
-            if editor.exporting {
-                ProgressView(value:editor.progress).frame(width:140)
-                Text("\(editor.jobLabel)… \(Int(editor.progress*100))%").font(.callout).monospacedDigit()
-                Button("Cancel") { editor.cancel() }
-            } else if let url=editor.lastExport {
-                Image(systemName:"checkmark.circle.fill").foregroundStyle(.green)
-                Text(url.lastPathComponent).lineLimit(1).font(.callout)
-                Button("Show in Finder") { editor.revealExport() }.controlSize(.small)
-            } else {
-                Text("← →  Step frames     I  Set start     O  Set end").font(.caption).foregroundStyle(.secondary)
-            }
-            Spacer()
-            Button("Save As…") { editor.export(saveAs:true) }.disabled(!editor.canExport)
-            Button("Export Clip") { editor.export() }.buttonStyle(.borderedProminent).disabled(!editor.canExport)
-        }.padding(.horizontal,18).frame(height:60)
-    }
-}
 
-struct Viewer: View {
-    @ObservedObject var editor:Editor
-    @ObservedObject var playback:Playback
-    var body:some View {
-        GeometryReader { geometry in
-            ZStack {
-                Color.black
-                if editor.showOutput {
-                    OutputView(player:editor.outputPlayer)
-                } else {
-                    let size=playback.details?.displaySize ?? CGSize(width:16,height:9)
-                    let scale=min(geometry.size.width/size.width,geometry.size.height/size.height)
-                    let display=CGSize(width:size.width*scale,height:size.height*scale)
-                    ZStack {
-                        VideoSurface(layer:playback.video,rotation:playback.details?.rotation ?? 0,pixelAspect:playback.details?.pixelAspect ?? 1)
-                        if editor.edit.cropPreset != .original {
-                            CropOverlay(crop:$editor.edit.crop).disabled(editor.exporting)
+    private var sidebar:some View {
+        VStack(spacing:0) {
+            sourceHeader.padding(.horizontal,14).padding(.top,16).padding(.bottom,17)
+            ScrollView {
+                VStack(spacing:16) {
+                    if let details=playback.details {
+                        section("Clip",detail:String(format:"%.3f s",editor.clipDuration)) {
+                            C1Group {
+                                boundaryRow("Start",isStart:true,text:$startText,value:editor.inTime)
+                                rowDivider
+                                boundaryRow("End",isStart:false,text:$endText,value:editor.end?.time ?? 0)
+                                rowDivider
+                                HStack {
+                                    Text("Snap to source frames")
+                                    Spacer()
+                                    Text("I / O to mark")
+                                }.font(.system(size:10)).foregroundStyle(C1.muted).padding(.horizontal,10).frame(height:27)
+                            }
                         }
-                    }.frame(width:display.width,height:display.height)
+                        framing(details)
+                        videoSettings(details)
+                        audioSettings(details)
+                    } else {
+                        VStack(spacing:12) {
+                            if editor.loading { ProgressView().controlSize(.small); Text("Opening video…") }
+                            else { Text("This video could not be opened.") }
+                        }.font(.callout).foregroundStyle(C1.secondary).frame(maxWidth:.infinity).padding(.top,32)
+                    }
+                }.padding(.horizontal,14).padding(.bottom,16)
+            }.disabled(editor.loading || editor.exporting)
+            exportFooter
+        }
+        .background {
+            ZStack {
+                SidebarMaterial()
+                LinearGradient(colors:[Color(red:0.80,green:0.87,blue:0.98).opacity(0.40),Color(red:0.74,green:0.80,blue:0.93).opacity(0.34)],startPoint:.topLeading,endPoint:.bottomTrailing)
+            }
+        }
+        .overlay(alignment:.trailing) { C1.line.frame(width:1) }
+    }
+
+    private var sourceHeader:some View {
+        HStack(spacing:9) {
+            Group {
+                if let image=playback.backdrop { Image(nsImage:image).resizable().scaledToFill() }
+                else { Image(systemName:"film").font(.system(size:18)).foregroundStyle(C1.secondary) }
+            }
+            .frame(width:43,height:31).background(C1.canvas).clipShape(RoundedRectangle(cornerRadius:5))
+            VStack(alignment:.leading,spacing:4) {
+                Text(editor.source?.lastPathComponent ?? "Video").font(.system(size:11,weight:.semibold)).lineLimit(1).help(editor.source?.lastPathComponent ?? "Video")
+                if let details=playback.details {
+                    Text("\(details.codec.uppercased()) · \(Int(details.displaySize.width))×\(Int(details.displaySize.height)) · \(details.fps.formatted(.number.precision(.fractionLength(0...2)))) fps")
+                        .font(.system(size:9)).foregroundStyle(C1.secondary).lineLimit(1)
+                } else { Text("Reading video").font(.system(size:10)).foregroundStyle(C1.muted) }
+            }.frame(maxWidth:.infinity,alignment:.leading)
+            Button { editor.close() } label: { Image(systemName:"xmark").font(.system(size:8,weight:.semibold)).frame(width:19,height:19).background(C1.line,in:Circle()) }
+                .buttonStyle(.plain).foregroundStyle(C1.secondary).disabled(editor.exporting)
+                .help("Close video and return to the empty state").accessibilityLabel("Close video")
+        }
+        .padding(8).background(.white.opacity(0.62),in:RoundedRectangle(cornerRadius:10))
+        .overlay(RoundedRectangle(cornerRadius:10).stroke(.white.opacity(0.75),lineWidth:1))
+    }
+
+    private func section<Content:View>(_ title:String,detail:String?=nil,@ViewBuilder content:()->Content)->some View {
+        VStack(alignment:.leading,spacing:7) {
+            HStack {
+                Text(title).font(.system(size:11,weight:.semibold)).foregroundStyle(C1.secondary)
+                Spacer()
+                if let detail { Text(detail).font(.system(size:10)).foregroundStyle(C1.muted).monospacedDigit() }
+            }.padding(.horizontal,5)
+            content()
+        }
+    }
+    private var rowDivider:some View { C1.line.frame(height:0.5).padding(.horizontal,10) }
+
+    private func boundaryRow(_ title:String,isStart:Bool,text:Binding<String>,value:Double)->some View {
+        HStack(spacing:4) {
+            Text(title).font(.system(size:12)).frame(maxWidth:.infinity,alignment:.leading)
+            nudgeButton(isStart:isStart,direction:-1)
+            TextField(title,text:text)
+                .font(.system(size:12,weight:.medium).monospacedDigit())
+                .textFieldStyle(.plain).multilineTextAlignment(.center)
+                .padding(.vertical,5).frame(width:107)
+                .background(C1.paper,in:RoundedRectangle(cornerRadius:5))
+                .overlay(RoundedRectangle(cornerRadius:5).stroke(C1.line,lineWidth:1))
+                .overlay(alignment:.leading) { C1.amber.frame(width:2).padding(.vertical,4) }
+                .onSubmit {
+                    guard text.wrappedValue != TimeText.format(value) else { return }
+                    if let t=TimeText.parse(text.wrappedValue) { isStart ? editor.markStart(t) : editor.markEnd(t) }
+                    else { text.wrappedValue=TimeText.format(value); editor.error="Enter seconds or a time such as 00:01:23.450." }
+                }
+                .help(isStart ? "First included source frame" : "Last included source frame")
+            nudgeButton(isStart:isStart,direction:1)
+        }.padding(.horizontal,10).frame(height:36)
+    }
+    private func nudgeButton(isStart:Bool,direction:Int)->some View {
+        Button { editor.nudgeBoundary(start:isStart,direction:direction) } label: {
+            Image(systemName:direction < 0 ? "chevron.left" : "chevron.right").font(.system(size:8,weight:.medium)).frame(width:15,height:26)
+        }.buttonStyle(.plain).foregroundStyle(C1.muted)
+            .accessibilityLabel("Move \(isStart ? "start" : "end") one frame \(direction < 0 ? "earlier" : "later")")
+    }
+
+    private func framing(_ details:MediaDetails)->some View {
+        let g=editor.edit.geometry(for:details)
+        return section("Framing",detail:"\(g.outWidth)×\(g.outHeight)") {
+            C1Group {
+                HStack(spacing:1) {
+                    ForEach(CropPreset.allCases) { preset in
+                        let selected=editor.edit.cropPreset == preset
+                        Button { editor.edit.cropPreset=preset } label: {
+                            VStack(spacing:4) {
+                                AspectGlyph(ratio:preset.ratio ?? details.displaySize.width/details.displaySize.height,custom:preset == .custom)
+                                Text(preset.rawValue).font(.system(size:9))
+                            }
+                            .frame(maxWidth:.infinity).frame(height:47)
+                            .foregroundStyle(selected ? C1.blue : C1.secondary)
+                            .background(selected ? C1.blue.opacity(0.09) : .clear,in:RoundedRectangle(cornerRadius:7))
+                            .overlay(RoundedRectangle(cornerRadius:7).stroke(selected ? C1.blue.opacity(0.18) : .clear,lineWidth:1))
+                        }.buttonStyle(.plain).help("Crop to \(preset.rawValue)").accessibilityLabel("Crop \(preset.rawValue)")
+                    }
+                }.padding(.horizontal,5).padding(.top,8).padding(.bottom,7)
+                if editor.edit.cropPreset == .custom {
+                    HStack(spacing:6) {
+                        Text("Ratio").frame(maxWidth:.infinity,alignment:.leading)
+                        TextField("Width",value:$editor.edit.customWidth,format:.number).frame(width:57)
+                        Text(":").foregroundStyle(C1.muted)
+                        TextField("Height",value:$editor.edit.customHeight,format:.number).frame(width:57)
+                    }.font(.system(size:11)).padding(.horizontal,10).padding(.bottom,9).textFieldStyle(.roundedBorder)
+                }
+                rowDivider
+                HStack {
+                    Text("Resolution")
+                    Spacer(minLength:4)
+                    Picker("Resolution",selection:$editor.edit.resolution) {
+                        ForEach(Resolution.allCases) { Text($0.rawValue).tag($0) }
+                    }.labelsHidden().frame(maxWidth:154)
+                }.font(.system(size:12)).controlSize(.small).padding(.horizontal,10).frame(height:36)
+            }
+        }
+    }
+
+    private func videoSettings(_ details:MediaDetails)->some View {
+        section("Video",detail:details.hdr && !editor.edit.convertToSDR ? "MP4 · HDR" : "MP4") {
+            C1Group {
+                Picker("Codec",selection:$editor.edit.codec) { ForEach(VideoCodec.allCases) { Text($0.rawValue).tag($0) } }
+                    .labelsHidden().pickerStyle(.segmented).controlSize(.small).padding(8)
+                    .disabled(details.hdr && !editor.edit.convertToSDR)
+                rowDivider
+                VStack(spacing:5) {
+                    HStack {
+                        Text("Quality").font(.system(size:12))
+                        Spacer()
+                        Text(editor.edit.quality < 55 ? "Smaller file" : editor.edit.quality > 75 ? "Higher quality" : "Balanced").font(.system(size:10)).foregroundStyle(C1.muted)
+                    }
+                    Slider(value:$editor.edit.quality,in:20...95,step:1).controlSize(.mini).accessibilityLabel("Output quality")
+                    HStack { Text("Smaller file"); Spacer(); Text("Higher quality") }.font(.system(size:9)).foregroundStyle(C1.muted)
+                }.padding(10)
+                if details.hdr {
+                    rowDivider
+                    Toggle("Convert to SDR",isOn:$editor.edit.convertToSDR).font(.system(size:11)).toggleStyle(.switch).controlSize(.mini).padding(10)
                 }
             }
         }
     }
-}
-struct VideoSurface:NSViewRepresentable {
-    let layer:AVSampleBufferDisplayLayer
-    var rotation:Double
-    var pixelAspect:Double
-    func makeNSView(context:Context) -> Surface { let v=Surface(); v.wantsLayer=true; v.display=layer; v.layer?.addSublayer(layer); return v }
-    func updateNSView(_ view:Surface,context:Context) { view.rotation=rotation; view.needsLayout=true }
-    final class Surface:NSView {
-        var display:AVSampleBufferDisplayLayer?
-        var rotation=0.0
-        override func layout() {
-            super.layout()
-            guard let display else { return }
-            CATransaction.begin(); CATransaction.setDisableActions(true)
-            let rotated=abs(sin(rotation * .pi/180)) > 0.5
-            display.setAffineTransform(.identity)
-            display.bounds=CGRect(origin:.zero,size:rotated ? CGSize(width:bounds.height,height:bounds.width) : bounds.size)
-            display.position=CGPoint(x:bounds.midX,y:bounds.midY)
-            display.setAffineTransform(CGAffineTransform(rotationAngle:-rotation * .pi/180))
-            CATransaction.commit()
-        }
-    }
-}
-struct OutputView:NSViewRepresentable {
-    let player:AVPlayer
-    func makeNSView(context:Context) -> AVPlayerView { let v=AVPlayerView(); v.player=player; v.controlsStyle = .floating; return v }
-    func updateNSView(_ view:AVPlayerView,context:Context) { view.player=player }
-}
-struct CropOverlay:View {
-    @Binding var crop:CGRect
-    @State private var original:CGRect?
-    var body:some View {
-        GeometryReader { geo in
-            let r=CGRect(x:crop.minX*geo.size.width,y:crop.minY*geo.size.height,width:crop.width*geo.size.width,height:crop.height*geo.size.height)
-            ZStack(alignment:.topLeading) {
-                Path { path in path.addRect(CGRect(origin:.zero,size:geo.size)); path.addRect(r) }.fill(.black.opacity(0.5),style:FillStyle(eoFill:true)).allowsHitTesting(false)
-                Rectangle().fill(.clear).contentShape(Rectangle()).overlay(Rectangle().stroke(.white,lineWidth:1))
-                    .frame(width:r.width,height:r.height).position(x:r.midX,y:r.midY)
-                    .gesture(DragGesture().onChanged { value in
-                        if original == nil { original=crop }
-                        guard let o=original else { return }
-                        crop.origin=CGPoint(x:max(0,min(1-o.width,o.minX+value.translation.width/geo.size.width)),y:max(0,min(1-o.height,o.minY+value.translation.height/geo.size.height)))
-                    }.onEnded { _ in original=nil })
-                Image(systemName:"arrow.up.left.and.arrow.down.right").font(.system(size:12,weight:.bold)).foregroundStyle(.black).padding(5).background(.white,in:RoundedRectangle(cornerRadius:3))
-                    .position(x:r.maxX-8,y:r.maxY-8)
-                    .gesture(DragGesture().onChanged { value in
-                        if original == nil { original=crop }
-                        guard let o=original else { return }
-                        let factor=max(0.05,min((1-o.minX)/o.width,(1-o.minY)/o.height,1+value.translation.width/(o.width*geo.size.width)))
-                        crop.size=CGSize(width:o.width*factor,height:o.height*factor)
-                    }.onEnded { _ in original=nil })
+
+    private func audioSettings(_ details:MediaDetails)->some View {
+        section("Audio") {
+            C1Group {
+                if details.audioLabels.isEmpty {
+                    Text("No audio track").font(.system(size:11)).foregroundStyle(C1.muted).frame(maxWidth:.infinity,alignment:.leading).padding(11)
+                } else {
+                    HStack {
+                        Text("Track")
+                        Spacer(minLength:4)
+                        Picker("Audio track",selection:$editor.edit.audioTrack) {
+                            ForEach(details.audioLabels.indices,id:\.self) { Text(details.audioLabels[$0]).tag($0) }
+                        }.labelsHidden().frame(maxWidth:170)
+                    }.font(.system(size:12)).controlSize(.small).padding(.horizontal,10).frame(height:35)
+                    rowDivider
+                    Toggle("Include audio",isOn:Binding(get:{!editor.edit.muted},set:{editor.edit.muted = !$0}))
+                        .font(.system(size:12)).toggleStyle(.switch).controlSize(.mini).padding(.horizontal,10).frame(height:34)
+                }
             }
         }
+    }
+
+    private var exportFooter:some View {
+        VStack(alignment:.leading,spacing:9) {
+            if editor.exporting {
+                HStack {
+                    Text(editor.jobLabel).font(.system(size:11,weight:.medium))
+                    Spacer()
+                    Button("Cancel") { editor.cancel() }.font(.system(size:11)).buttonStyle(.plain).foregroundStyle(C1.blue)
+                }
+                ProgressView(value:editor.progress).controlSize(.small)
+                Text("\(Int(editor.progress*100))%").font(.system(size:10)).foregroundStyle(C1.secondary).monospacedDigit()
+            } else {
+                HStack(spacing:5) {
+                    VStack(alignment:.leading,spacing:4) {
+                        Text(editor.nextOutputURL?.lastPathComponent ?? "Your clip.mp4").font(.system(size:10,weight:.medium)).lineLimit(1)
+                        if let details=playback.details {
+                            let g=editor.edit.geometry(for:details)
+                            Text("\(g.outWidth)×\(g.outHeight) · \(editor.edit.codec.rawValue)\(editor.edit.muted ? " · No audio" : "")")
+                                .font(.system(size:9)).foregroundStyle(C1.muted).monospacedDigit()
+                        }
+                    }.frame(maxWidth:.infinity,alignment:.leading)
+                    Menu {
+                        Button("Save As…") { editor.export(saveAs:true) }.disabled(!editor.canExport)
+                        if editor.lastExport != nil { Button("Show Last Export in Finder") { editor.revealExport() } }
+                    } label: { Image(systemName:"ellipsis").font(.system(size:12)) }.menuStyle(.borderlessButton).menuIndicator(.hidden).frame(width:20).help("Save As and export actions")
+                }
+                HStack(spacing:8) {
+                    Button("Preview 5 s") { editor.preview() }.buttonStyle(C1ButtonStyle()).disabled(!editor.canExport)
+                    Button("Export Clip") { editor.export() }.buttonStyle(C1ButtonStyle(primary:true)).disabled(!editor.canExport)
+                }
+                if editor.lastExport != nil {
+                    Button { editor.revealExport() } label: { Label("Saved · Show in Finder",systemImage:"checkmark.circle.fill") }
+                        .buttonStyle(.plain).font(.system(size:9)).foregroundStyle(C1.secondary).frame(maxWidth:.infinity)
+                } else {
+                    Text("Save beside original · never overwrite").font(.system(size:9)).foregroundStyle(C1.muted).frame(maxWidth:.infinity)
+                }
+            }
+        }.padding(.horizontal,14).padding(.top,12).padding(.bottom,14)
+            .background(C1.line.frame(height:1),alignment:.top)
+    }
+
+    private var timelineDeck:some View {
+        VStack(spacing:9) {
+            HStack(spacing:9) {
+                Button { editor.seek(editor.inTime) } label: { Image(systemName:"backward.end.fill") }.help("Go to start")
+                Button { editor.stepFrame(-1) } label: { Image(systemName:"chevron.left") }.help("Previous frame (←)")
+                Button { editor.togglePlayback() } label: {
+                    Image(systemName:editor.isPlaying ? "pause.fill" : "play.fill").frame(width:27,height:24).background(C1.blue.opacity(0.07),in:RoundedRectangle(cornerRadius:5))
+                }.help("Play / pause (Space)")
+                Button { editor.stepFrame(1) } label: { Image(systemName:"chevron.right") }.help("Next frame (→)")
+                Text(TimeText.format(editor.displayedPosition)).font(.system(size:12,weight:.semibold).monospacedDigit()).foregroundStyle(C1.ink).padding(.leading,3)
+                if playback.seeking { ProgressView().controlSize(.mini) }
+                Spacer()
+            }.buttonStyle(.borderless).font(.system(size:11)).foregroundStyle(C1.secondary).frame(height:27)
+            Timeline(editor:editor,playback:playback).frame(height:144)
+            HStack(spacing:14) {
+                Text("I  Set start"); Text("O  Set end"); Text("← →  Step a frame")
+                Spacer()
+                Text("Scroll to move through the timeline")
+            }.font(.system(size:9)).foregroundStyle(C1.muted)
+        }.padding(.horizontal,18).padding(.top,12).padding(.bottom,12)
+            .background(C1.paper).overlay(C1.line.frame(height:1),alignment:.top)
+            .disabled(editor.loading || editor.exporting)
+    }
+
+    private var emptyState:some View {
+        ZStack {
+            LinearGradient(colors:[C1.paper,Color(red:0.91,green:0.94,blue:0.99)],startPoint:.topLeading,endPoint:.bottomTrailing)
+            VStack(spacing:15) {
+                Image(systemName:"film.stack").font(.system(size:34,weight:.light)).foregroundStyle(C1.blue)
+                    .frame(width:72,height:72).background(.white.opacity(0.8),in:RoundedRectangle(cornerRadius:15)).overlay(RoundedRectangle(cornerRadius:15).stroke(.white,lineWidth:1))
+                Text("Clip a moment from a video").font(.system(size:20,weight:.semibold))
+                Text("Drop a file anywhere in this window,\nor choose a video to start trimming.").multilineTextAlignment(.center).font(.system(size:12)).foregroundStyle(C1.secondary).lineSpacing(4)
+                Button("Open Video…") { editor.openPanel() }.buttonStyle(C1ButtonStyle(primary:true)).frame(width:146)
+                Text("MP4, MOV, WebM, MKV and AVI").font(.system(size:10)).foregroundStyle(C1.muted).padding(.top,2)
+            }
+        }.frame(maxWidth:.infinity,maxHeight:.infinity)
     }
 }

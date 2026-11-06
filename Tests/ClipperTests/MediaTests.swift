@@ -152,6 +152,83 @@ final class MediaTests:XCTestCase {
         XCTAssertFalse(editor.playback.seeking)
         XCTAssertTrue(editor.canExport)
     }
+    @MainActor private func waitUntil(_ condition:() -> Bool,timeout:Double=8) async throws {
+        let deadline=Date().addingTimeInterval(timeout)
+        while !condition(), Date()<deadline { try await Task.sleep(nanoseconds:10_000_000) }
+        XCTAssertTrue(condition(),"Timed out waiting for media state")
+    }
+    @MainActor func testQuietComparisonChaseCoalescesAndCloseResetsState() async throws {
+        let editor=Editor(); editor.open(fixture("vfr.mkv"))
+        try await waitUntil { !editor.loading && !editor.playback.seeking }
+        let settled=expectation(description:"The newest chase target is decoded")
+        for n in 0..<30 {
+            editor.playback.chase(1+Double(n)/30,completion:n==29 ? { settled.fulfill() } : nil)
+            XCTAssertFalse(editor.playback.seeking)
+            XCTAssertTrue(editor.canExport)
+        }
+        await fulfillment(of:[settled],timeout:4)
+        XCTAssertLessThanOrEqual(editor.playback.frame?.time ?? 10,1+29.0/30+0.000002)
+        editor.playback.chase(4.3)
+        editor.close()
+        try await Task.sleep(nanoseconds:100_000_000)
+        XCTAssertNil(editor.source); XCTAssertNil(editor.playback.details); XCTAssertNil(editor.playback.frame)
+        XCTAssertEqual(editor.previewMode,.original); XCTAssertFalse(editor.previewReady); XCTAssertFalse(editor.playback.seeking)
+    }
+    @MainActor func testEncodedCompareStepsKeepSourceAndOutputFramesAligned() async throws {
+        let editor=Editor(); editor.open(fixture("cfr.mp4"))
+        try await waitUntil { !editor.loading && !editor.playback.seeking }
+        editor.markStart(1)
+        try await waitUntil { !editor.playback.seeking }
+        editor.playback.seek(2.99)
+        try await waitUntil { !editor.playback.seeking }
+        editor.markEnd()
+        try await waitUntil { !editor.playback.seeking }
+        editor.seek(1)
+        try await waitUntil { !editor.playback.seeking }
+        editor.preview()
+        try await waitUntil({ !editor.exporting && editor.previewReady },timeout:12)
+        XCTAssertNotNil(editor.previewURL)
+        editor.switchPreviewMode(.compare)
+        try await waitUntil { !editor.comparisonPreparing }
+        XCTAssertEqual(editor.previewMode,.compare)
+        for _ in 0..<4 {
+            let old=editor.previewPosition
+            editor.stepFrame(1)
+            try await waitUntil { !editor.comparisonPreparing && !editor.playback.seeking && editor.previewPosition>old+0.001 }
+            XCTAssertEqual(editor.playback.frame?.time ?? -1,editor.previewStart+editor.previewPosition,accuracy:0.000003)
+        }
+        editor.stepFrame(-1)
+        try await waitUntil { !editor.comparisonPreparing && !editor.playback.seeking }
+        XCTAssertEqual(editor.playback.frame?.time ?? -1,editor.previewStart+editor.previewPosition,accuracy:0.000003)
+        editor.invalidatePreview()
+        XCTAssertEqual(editor.previewMode,.original); XCTAssertFalse(editor.previewReady); XCTAssertNil(editor.previewURL)
+        editor.close()
+    }
+    @MainActor func testComparisonSurfaceAlignsRoundedCropAndKeepsOneSourceOwner() {
+        let source=AVSampleBufferDisplayLayer()
+        let surface=ComparisonSurface.Surface(source:source,player:AVPlayer())
+        surface.details=MediaDetails(duration:10,origin:0,width:3840,height:2160,rotation:0,pixelAspect:1,fps:60,hdr:false,codec:"av1",audioLabels:[],audioStreams:[])
+        surface.edit.crop=CGRect(x:0.25,y:0.125,width:0.5,height:0.5)
+        surface.mode = .compare; surface.wipe=0.4
+        surface.frame=CGRect(x:0,y:0,width:960,height:540)
+        surface.layoutSubtreeIfNeeded()
+        XCTAssertEqual(source.bounds.width,1920,accuracy:0.001)
+        XCTAssertEqual(source.bounds.height,1080,accuracy:0.001)
+        XCTAssertEqual(source.position.x,480,accuracy:0.001)
+        XCTAssertEqual(source.position.y,135,accuracy:0.001)
+        XCTAssertEqual(surface.wipeMask.frame.minX,384,accuracy:0.001)
+        XCTAssertTrue(source.superlayer === surface.sourceViewport)
+        surface.mode = .output; surface.needsLayout=true; surface.layoutSubtreeIfNeeded()
+        XCTAssertTrue(source.superlayer === surface.sourceViewport)
+        XCTAssertTrue(surface.sourceViewport.isHidden)
+        XCTAssertNil(surface.output.mask)
+        surface.mode = .original; surface.needsLayout=true; surface.layoutSubtreeIfNeeded()
+        XCTAssertEqual(source.bounds.width,960,accuracy:0.001)
+        XCTAssertEqual(source.bounds.height,540,accuracy:0.001)
+        XCTAssertFalse(surface.sourceViewport.isHidden)
+        ComparisonSurface.dismantleNSView(surface,coordinator:())
+        XCTAssertNil(source.superlayer)
+    }
     func testUserSampleCutWhenProvided() async throws {
         guard let path=ProcessInfo.processInfo.environment["CLIPPER_SAMPLE"] else { throw XCTSkip("Set CLIPPER_SAMPLE to test a real long-GOP 4K source") }
         let source=URL(fileURLWithPath:path)

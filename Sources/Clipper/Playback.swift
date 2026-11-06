@@ -2,6 +2,7 @@ import AppKit
 import AVFoundation
 import CMedia
 import Combine
+import CoreImage
 
 final class Playback: ObservableObject {
     let video = AVSampleBufferDisplayLayer()
@@ -19,7 +20,15 @@ final class Playback: ObservableObject {
     private let cancellation=clip_request_create()!
     private var observer: Any?
     private var deferredActions: [() -> Void] = []
+    private struct ChaseRequest { var time:Double; var completion:(() -> Void)? }
+    private var chaseTarget:ChaseRequest?
+    private var chaseRunning=false
+    private var chaseEpoch=0
+    private let imageQueue=DispatchQueue(label:"clipper.backdrop",qos:.utility)
     private var sourceURL: URL?
+    private let imageContext=CIContext(options:[.cacheIntermediates:false])
+    private var backdropTime=Double.nan
+    @Published private(set) var backdrop:NSImage?
     @Published var details: MediaDetails?
     @Published var frame: FramePoint?
     @Published var position: Double = 0
@@ -54,6 +63,7 @@ final class Playback: ObservableObject {
         return latestRequest == value
     }
     func open(_ url: URL, audioTrack: Int = 0, at time: Double = 0, onFailure: (() -> Void)? = nil, completion: (() -> Void)? = nil) {
+        stopChasing()
         deferredActions=[]
         pause(); seeking=true; error=nil
         let token=nextGeneration()
@@ -69,7 +79,7 @@ final class Playback: ObservableObject {
                 DispatchQueue.main.async { if self.isCurrent(token) { self.error="Could not open video: \(message)"; self.seeking=false; self.details=nil; onFailure?() } }; return
             }
             clip_enable_cache(m)
-            self.media=m; self.generation=token
+            self.media=m; self.generation=token; self.backdropTime = .nan
             let info=clip_info(m)
             var codec=info.codec
             let codecText=withUnsafePointer(to:&codec) { $0.withMemoryRebound(to:CChar.self,capacity:64) { String(cString:$0) } }
@@ -82,6 +92,7 @@ final class Playback: ObservableObject {
         }
     }
     func seek(_ requested: Double, onFailure: (() -> Void)? = nil, completion: (() -> Void)? = nil) {
+        stopChasing()
         pause(); seeking=true
         let token=nextGeneration()
         let target=max(0,min(requested,max(0,(details?.duration ?? requested)-0.000001)))
@@ -95,26 +106,93 @@ final class Playback: ObservableObject {
             }
             let sample=unmanaged.takeRetainedValue()
             let point=FramePoint(time:frame.time,duration:frame.duration,pts:frame.pts,timeBaseNum:frame.timeBaseNum,timeBaseDen:frame.timeBaseDen)
+            var backdropPixel:CVPixelBuffer?
+            if self.isCurrent(token), !self.backdropTime.isFinite || abs(self.backdropTime-frame.time)>2,
+               let pixel=CMSampleBufferGetImageBuffer(sample) {
+                backdropPixel=pixel; self.backdropTime=frame.time
+            }
+            if let pixel=backdropPixel { self.makeBackdrop(pixel,token:token) }
             DispatchQueue.main.async {
                 guard self.isCurrent(token) else { return }
-                self.video.flushAndRemoveImage(); self.audio.flush()
-                self.clock.setRate(0,time:CMTime(seconds:frame.time,preferredTimescale:1000000))
-                // A paused display must replace its image immediately.
-                if let attachments=CMSampleBufferGetSampleAttachmentsArray(sample,createIfNecessary:true) as? [NSMutableDictionary] { attachments.first?[kCMSampleAttachmentKey_DisplayImmediately]=true }
-                self.video.enqueue(sample)
-                self.position=frame.time; self.frame=point; self.seeking=false
+                self.present(sample,point:point); self.seeking=false
                 completion?()
                 self.runNextAction()
             }
         }
     }
-    func step(_ direction: Int) {
-        if seeking { deferredActions.append { [weak self] in self?.step(direction) }; return }
-        if playing { let t=position; seek(t) { self.step(direction) }; return }
+    func close() {
+        stopChasing()
+        pause(); let token=nextGeneration()
+        deferredActions=[]; sourceURL=nil; details=nil; frame=nil; position=0; seeking=false; error=nil; backdrop=nil; endTime = .infinity
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.running=false; self.generation=token
+            if let sample=self.pending?.sample { sample.release() }; self.pending=nil
+            if let media=self.media { clip_close(media) }; self.media=nil
+            self.video.flushAndRemoveImage(); self.audio.flush(); self.backdropTime = .nan
+        }
+    }
+    private func makeBackdrop(_ pixel:CVPixelBuffer,token:Int) {
+        imageQueue.async { [weak self] in
+            guard let self, self.isCurrent(token) else { return }
+            var image=CIImage(cvPixelBuffer:pixel)
+            image=image.transformed(by:CGAffineTransform(scaleX:160/image.extent.width,y:160/image.extent.width))
+            guard let cg=self.imageContext.createCGImage(image,from:image.extent) else { return }
+            DispatchQueue.main.async { if self.isCurrent(token) { self.backdrop=NSImage(cgImage:cg,size:.zero) } }
+        }
+    }
+    private func present(_ sample:CMSampleBuffer,point:FramePoint) {
+        video.flushAndRemoveImage(); audio.flush()
+        clock.setRate(0,time:CMTime(seconds:point.time,preferredTimescale:1000000))
+        if let attachments=CMSampleBufferGetSampleAttachmentsArray(sample,createIfNecessary:true) as? [NSMutableDictionary] { attachments.first?[kCMSampleAttachmentKey_DisplayImmediately]=true }
+        video.enqueue(sample); position=point.time; frame=point
+    }
+    /// A preview clock can request new frames without cancelling an in-flight decode.
+    /// Only the latest waiting target is retained; normal editing seeks remain separate.
+    func chase(_ time:Double,completion:(() -> Void)?=nil) {
+        guard details != nil else { return }
+        chaseTarget=ChaseRequest(time:time,completion:completion)
+        startNextChase()
+    }
+    func stopChasing() {
+        chaseEpoch += 1; chaseTarget=nil
+        if chaseRunning { _=nextGeneration() }
+        chaseRunning=false
+    }
+    private func startNextChase() {
+        guard !chaseRunning, let request=chaseTarget else { return }
+        if seeking {
+            let epoch=chaseEpoch
+            afterPendingSeeks { [weak self] in if self?.chaseEpoch==epoch { self?.startNextChase() } }
+            return
+        }
+        chaseTarget=nil; chaseRunning=true
+        let epoch=chaseEpoch, token=nextGeneration()
+        let time=max(0,min(request.time,(details?.duration ?? request.time)-0.000001))
+        queue.async { [weak self] in
+            guard let self, self.isCurrent(token), let media=self.media else { return }
+            self.running=false
+            if let sample=self.pending?.sample { sample.release() }; self.pending=nil
+            let value=clip_frame_cancellable(media,time,self.cancellation,Int32(truncatingIfNeeded:token))
+            let sample=value.sample?.takeRetainedValue()
+            DispatchQueue.main.async {
+                guard self.chaseEpoch==epoch, self.isCurrent(token) else { return }
+                self.chaseRunning=false
+                if value.kind==1, let sample {
+                    self.present(sample,point:FramePoint(time:value.time,duration:value.duration,pts:value.pts,timeBaseNum:value.timeBaseNum,timeBaseDen:value.timeBaseDen))
+                }
+                request.completion?()
+                self.startNextChase()
+            }
+        }
+    }
+    func step(_ direction: Int,onFailure:(() -> Void)?=nil,completion:(() -> Void)?=nil) {
+        if seeking { deferredActions.append { [weak self] in self?.step(direction,onFailure:onFailure,completion:completion) }; return }
+        if playing { let t=position; seek(t,onFailure:onFailure) { self.step(direction,onFailure:onFailure,completion:completion) }; return }
         guard let frame else { return }
-        if direction > 0 { seek(frame.end + 0.000002); return }
+        if direction > 0 { seek(frame.end + 0.000002,onFailure:onFailure,completion:completion); return }
         // The containing frame just before this PTS is the exact predecessor.
-        seek(max(0,frame.time-0.000002))
+        seek(max(0,frame.time-0.000002),onFailure:onFailure,completion:completion)
     }
     func afterPendingSeeks(_ action: @escaping () -> Void) {
         if seeking || !deferredActions.isEmpty { deferredActions.append(action) } else { action() }

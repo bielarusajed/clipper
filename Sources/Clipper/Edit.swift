@@ -1,6 +1,11 @@
 import Foundation
 import CoreGraphics
 
+enum PreviewMode:String,CaseIterable,Identifiable {
+    case original="Original", compare="Compare", output="Output"
+    var id:Self { self }
+}
+
 enum VideoCodec: String, CaseIterable, Identifiable {
     case h264 = "H.264", hevc = "H.265"
     var id: Self { self }

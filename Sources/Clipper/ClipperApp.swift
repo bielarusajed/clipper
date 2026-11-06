@@ -7,15 +7,16 @@ import AppKit
     var body: some Scene {
         WindowGroup {
             EditorView(editor:editor,playback:editor.playback)
-                .frame(minWidth:940,minHeight:680)
+                .frame(minWidth:1010,minHeight:720)
                 .onAppear { delegate.editor=editor; delegate.deliverPending() }
                 .onOpenURL { editor.open($0) }
         }
-        .defaultSize(width:1180,height:820)
+        .defaultSize(width:1120,height:820)
         .windowStyle(.titleBar)
         .commands {
             CommandGroup(replacing:.newItem) {
                 Button("Open Video…") { editor.openPanel() }.keyboardShortcut("o").disabled(editor.exporting)
+                Button("Close Video") { editor.close() }.keyboardShortcut("w",modifiers:[.command,.shift]).disabled(editor.source == nil || editor.exporting)
             }
             CommandGroup(after:.saveItem) {
                 Button("Export Clip") { editor.export() }.keyboardShortcut("e").disabled(!editor.canExport)
@@ -23,8 +24,8 @@ import AppKit
             }
             CommandMenu("Playback") {
                 Button("Play / Pause") { editor.togglePlayback() }.disabled(editor.loading)
-                Button("Previous Frame") { editor.returnToOriginal(); editor.playback.step(-1) }.disabled(editor.loading)
-                Button("Next Frame") { editor.returnToOriginal(); editor.playback.step(1) }.disabled(editor.loading)
+                Button("Previous Frame") { editor.stepFrame(-1) }.disabled(editor.loading)
+                Button("Next Frame") { editor.stepFrame(1) }.disabled(editor.loading)
                 Divider()
                 Button("Set Start Here") { editor.markStart() }.disabled(editor.exporting || editor.loading)
                 Button("Set End Here") { editor.markEnd() }.disabled(editor.exporting || editor.loading)
@@ -44,8 +45,8 @@ import AppKit
                   !(NSApp.keyWindow?.firstResponder is NSTextView),
                   event.modifierFlags.intersection([.command,.control,.option]).isEmpty else { return event }
             switch event.keyCode {
-            case 123: editor.returnToOriginal(); editor.playback.step(-1)
-            case 124: editor.returnToOriginal(); editor.playback.step(1)
+            case 123: editor.stepFrame(-1)
+            case 124: editor.stepFrame(1)
             case 49: editor.togglePlayback()
             default:
                 if event.charactersIgnoringModifiers?.lowercased() == "i" { editor.markStart() }
