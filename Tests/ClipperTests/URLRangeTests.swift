@@ -98,6 +98,8 @@ final class URLRangeTests:XCTestCase {
             XCTAssertTrue(args.contains(imported.directory.appendingPathComponent("source.mkv").path))
             XCTAssertFalse(args.joined().contains("tls_verify"))
             XCTAssertFalse(args.contains("--force-keyframes-at-cuts"))
+            ImportWorkspace.removeAbandoned(root:imported.directory.deletingLastPathComponent())
+            XCTAssertTrue(FileManager.default.fileExists(atPath:imported.file.path),"A ranged source must retain its active workspace lease")
             let mapping=try XCTUnwrap(imported.timeline)
             XCTAssertGreaterThan(mapping.offset,7); XCTAssertLessThan(mapping.offset,8.5)
             let importedPackets=try await packets(imported.file)
@@ -184,7 +186,7 @@ final class URLRangeTests:XCTestCase {
             let url=URL(string:base+"/"+name)!
             let media=try await URLMediaDownload.inspect(url:url,tools:tools)
             let imported=try await URLMediaDownload.download(url:url,media:media,selector:media.selector(video:"best",audio:"best"),range:range,tools:tools,temporaryRoot:dir.appendingPathComponent("Imports")) { _ in }
-            XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath:imported.directory.path),[imported.file.lastPathComponent])
+            XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath:imported.directory.path).filter { !$0.hasPrefix(".") },[imported.file.lastPathComponent])
             XCTAssertEqual(imported.file.pathExtension,"mkv")
             let probe=try await ImportProbe.read(file:imported.file,tools:tools)
             XCTAssertTrue(probe.streams?.allSatisfy { ["video","audio"].contains($0.codec_type ?? "") } == true)

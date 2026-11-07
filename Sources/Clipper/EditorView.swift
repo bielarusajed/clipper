@@ -202,7 +202,7 @@ struct EditorView:View {
     private func videoSettings(_ details:MediaDetails)->some View {
         section("Video",detail:details.hdr && !editor.edit.convertToSDR ? "MP4 · HDR" : "MP4") {
             C1Group {
-                Picker("Codec",selection:$editor.edit.codec) { ForEach(VideoCodec.allCases) { Text($0.rawValue).tag($0) } }
+                Picker("Codec",selection:Binding(get:{editor.edit.codec},set:{editor.setCodec($0)})) { ForEach(VideoCodec.allCases) { Text($0.rawValue).tag($0) } }
                     .labelsHidden().pickerStyle(.segmented).controlSize(.small).padding(8)
                     .disabled(details.hdr && !editor.edit.convertToSDR)
                 rowDivider
@@ -212,12 +212,12 @@ struct EditorView:View {
                         Spacer()
                         Text(editor.edit.quality < 55 ? "Smaller file" : editor.edit.quality > 75 ? "Higher quality" : "Balanced").font(.system(size:10)).foregroundStyle(C1.muted)
                     }
-                    Slider(value:$editor.edit.quality,in:20...95,step:1).controlSize(.mini).accessibilityLabel("Output quality")
+                    Slider(value:Binding(get:{editor.edit.quality},set:{editor.setQuality($0)}),in:20...95,step:1).controlSize(.mini).accessibilityLabel("Output quality")
                     HStack { Text("Smaller file"); Spacer(); Text("Higher quality") }.font(.system(size:9)).foregroundStyle(C1.muted)
                 }.padding(10)
                 if details.hdr {
                     rowDivider
-                    Toggle("Convert to SDR",isOn:$editor.edit.convertToSDR).font(.system(size:11)).toggleStyle(.switch).controlSize(.mini).padding(10)
+                    Toggle("Convert to SDR",isOn:Binding(get:{editor.edit.convertToSDR},set:{editor.setConvertToSDR($0)})).font(.system(size:11)).toggleStyle(.switch).controlSize(.mini).padding(10)
                 }
             }
         }
@@ -280,10 +280,7 @@ struct EditorView:View {
                         .overlay(RoundedRectangle(cornerRadius:8).stroke(C1.blue.opacity(0.4),lineWidth:1).allowsHitTesting(false))
                         .opacity(editor.canExport ? 1 : 0.45).disabled(!editor.canExport)
                 }
-                if editor.lastExport != nil {
-                    Button { editor.revealExport() } label: { Label("Saved · Show in Finder",systemImage:"checkmark.circle.fill") }
-                        .buttonStyle(.plain).font(.system(size:9)).foregroundStyle(C1.secondary).frame(maxWidth:.infinity)
-                }
+                ExportHandoffView(clip:editor.exportedClip)
             }
         }.padding(.horizontal,14).padding(.top,12).padding(.bottom,14)
             .background(C1.line.frame(height:1),alignment:.top)

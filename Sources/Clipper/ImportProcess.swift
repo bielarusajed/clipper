@@ -52,7 +52,7 @@ final class ImportProcess: @unchecked Sendable {
         posix_spawn_file_actions_init(&actions)
         posix_spawnattr_init(&attributes)
         defer { posix_spawn_file_actions_destroy(&actions); posix_spawnattr_destroy(&attributes) }
-        posix_spawnattr_setflags(&attributes,Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF))
+        posix_spawnattr_setflags(&attributes,Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_CLOEXEC_DEFAULT))
         posix_spawnattr_setpgroup(&attributes,0)
         var mask=sigset_t(), defaults=sigset_t()
         sigemptyset(&mask); sigfillset(&defaults)

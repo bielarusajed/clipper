@@ -2,6 +2,7 @@ import Foundation
 
 protocol URLImportServicing:Sendable {
     func prepare(status:@escaping @Sendable(String)->Void) async throws -> ImportTools
+    func refreshAfterFailure(status:@escaping @Sendable(String)->Void) async throws -> ImportTools?
     func inspect(url:URL,tools:ImportTools) async throws -> URLMedia
     func download(url:URL,media:URLMedia,selector:String,excludeAudio:Bool,range:ImportRange?,tools:ImportTools,
                   progress:@escaping @Sendable(ImportProgress)->Void) async throws -> TemporaryImport
@@ -10,6 +11,9 @@ protocol URLImportServicing:Sendable {
 struct URLImportService:URLImportServicing {
     func prepare(status:@escaping @Sendable(String)->Void) async throws -> ImportTools {
         try await ManagedImportTools.shared.prepare(status:status)
+    }
+    func refreshAfterFailure(status:@escaping @Sendable(String)->Void) async throws -> ImportTools? {
+        try await ManagedImportTools.shared.refreshAfterFailure(status:status)
     }
     func inspect(url:URL,tools:ImportTools) async throws -> URLMedia { try await URLMediaDownload.inspect(url:url,tools:tools) }
     func download(url:URL,media:URLMedia,selector:String,excludeAudio:Bool,range:ImportRange?,tools:ImportTools,
@@ -34,10 +38,12 @@ struct URLImportService:URLImportServicing {
     @Published private(set) var status=""
     @Published private(set) var progress:Double?
     @Published private(set) var error:String?
+    @Published private(set) var draining=false
     private let service:any URLImportServicing
     private var requestURL:URL?
     private var task:Task<Void,Never>?
     private var operation=UUID()
+    private var retiring:[UUID:Task<Void,Never>]=[:]
     private struct DownloadIntent {
         let video:String
         let audio:String
@@ -50,6 +56,7 @@ struct URLImportService:URLImportServicing {
     var includesAudio:Bool { media?.videos.first(where:{ $0.id == video })?.hasAudio == true }
     var excludesAudio:Bool { audio == "none" }
     var showsActivity:Bool { busy && (formatsVisible || downloadRequested || cancelling) }
+    var hasPendingWork:Bool { busy || draining }
 
     /// New presentation. Paste can start looking up before SwiftUI mounts the window.
     func begin(url:URL?=nil) {
@@ -60,7 +67,19 @@ struct URLImportService:URLImportServicing {
 
     func resetLookup() {
         guard !downloadRequested else { return }
-        operation=UUID(); task?.cancel(); task=nil
+        operation=UUID()
+        if let current=task {
+            let id=UUID()
+            retiring[id]=current; draining=true
+            current.cancel()
+            Task { [weak self] in
+                await current.value
+                guard let self else { return }
+                self.retiring.removeValue(forKey:id)
+                self.draining = !self.retiring.isEmpty
+            }
+        }
+        task=nil
         busy=false; cancelling=false; pendingDownload=nil
         media=nil; requestURL=nil; formatsVisible=false; video="best"; audio="best"; error=nil; status=""; progress=nil
     }
@@ -124,19 +143,31 @@ struct URLImportService:URLImportServicing {
                 }
             }
             var transferStarted=false
-            do {
-                let tools=try await service.prepare { [weak self] message in
-                    Task { @MainActor in
-                        guard let self, self.operation == token, self.busy, !self.cancelling else { return }
-                        self.status=message
-                    }
+            let reportStatus:@Sendable(String)->Void={ [weak self] message in
+                Task { @MainActor in
+                    guard let self, self.operation == token, self.busy, !self.cancelling else { return }
+                    self.status=message
                 }
+            }
+            var updateNotice:String?
+            do {
+                var tools=try await service.prepare(status:reportStatus)
+                updateNotice=tools.notice
                 try Task.checkCancellation()
                 let info:URLMedia
                 if let cached { info=cached }
                 else {
                     status="Loading formats…"
-                    info=try await service.inspect(url:url,tools:tools)
+                    do { info=try await service.inspect(url:url,tools:tools) }
+                    catch {
+                        try Task.checkCancellation()
+                        guard !(error is CancellationError) else { throw error }
+                        guard let refreshed=try await service.refreshAfterFailure(status:reportStatus) else { throw error }
+                        tools=refreshed; updateNotice=tools.notice
+                        try Task.checkCancellation()
+                        status="Loading formats…"
+                        info=try await service.inspect(url:url,tools:tools)
+                    }
                     try Task.checkCancellation()
                     guard operation == token else { return }
                     media=info
@@ -161,7 +192,10 @@ struct URLImportService:URLImportServicing {
                 if operation == token { status="Cancelled" }
             } catch {
                 if operation == token {
-                    self.error=error.localizedDescription; status=""
+                    if formatsVisible || downloadRequested {
+                        self.error=[error.localizedDescription,updateNotice].compactMap { $0 }.joined(separator:"\n")
+                    }
+                    status=""
                     canRetryFull=transferStarted && pendingDownload?.range != nil
                 }
             }
@@ -187,7 +221,17 @@ struct URLImportService:URLImportServicing {
         downloadRequested=false
         resetLookup()
     }
-    func cancelAndWait() async { let current=task; cancel(); await current?.value }
+    func cancelAndWait() async {
+        let current=task
+        cancel()
+        await current?.value
+        let pending=retiring
+        for (id,old) in pending {
+            await old.value
+            retiring.removeValue(forKey:id)
+        }
+        draining = !retiring.isEmpty
+    }
 }
 
 /// Owns one downloaded source. Exports live outside this directory.
@@ -196,11 +240,18 @@ final class TemporaryImport:@unchecked Sendable {
     let file:URL
     let range:ImportRange?
     let timeline:ImportTimeline?
-    static var root:URL { FileManager.default.temporaryDirectory.appendingPathComponent("Clipper/Imports",isDirectory:true) }
+    private let workspace:ImportWorkspace?
+    static var root:URL { ImportWorkspace.root }
     init(directory:URL,file:URL,range:ImportRange?=nil,timeline:ImportTimeline?=nil) {
-        self.directory=directory; self.file=file; self.range=range; self.timeline=timeline
+        self.directory=directory; self.file=file; self.range=range; self.timeline=timeline; workspace=nil
     }
-    func dispose() { try? FileManager.default.removeItem(at:directory) }
+    init(workspace:ImportWorkspace,file:URL,range:ImportRange?=nil,timeline:ImportTimeline?=nil) {
+        self.workspace=workspace; directory=workspace.directory; self.file=file; self.range=range; self.timeline=timeline
+    }
+    func dispose() {
+        if let workspace { workspace.dispose() }
+        else { try? FileManager.default.removeItem(at:directory) }
+    }
     deinit { dispose() }
 }
 
@@ -247,9 +298,9 @@ enum URLMediaDownload {
     }
 
     static func inspect(url:URL,tools:ImportTools) async throws -> URLMedia {
-        let workspace=FileManager.default.temporaryDirectory.appendingPathComponent("clipper-lookup-\(UUID().uuidString)",isDirectory:true)
-        try FileManager.default.createDirectory(at:workspace,withIntermediateDirectories:true)
-        defer { try? FileManager.default.removeItem(at:workspace) }
+        let lease=try ImportWorkspace()
+        let workspace=lease.directory
+        defer { lease.dispose() }
         let data=try await ImportProcess().run(executable:tools.ytDLP,
             arguments:arguments(tools:tools)+["--no-cache-dir","--dump-single-json","--skip-download","--",url.absoluteString],
             directory:workspace,environment:try environment(workspace:workspace))
@@ -265,11 +316,8 @@ enum URLMediaDownload {
                          temporaryRoot:URL=TemporaryImport.root,
                          progress:@escaping @Sendable(ImportProgress)->Void) async throws -> TemporaryImport {
         let files=FileManager.default
-        try files.createDirectory(at:temporaryRoot,withIntermediateDirectories:true)
-        let workspace=temporaryRoot.appendingPathComponent(UUID().uuidString,isDirectory:true)
-        try files.createDirectory(at:workspace,withIntermediateDirectories:false)
-        var completed=false
-        defer { if !completed { try? files.removeItem(at:workspace) } }
+        let lease=try ImportWorkspace(root:temporaryRoot)
+        let workspace=lease.directory
         let rangeArgs=try range?.downloaderArguments(duration:media.duration) ?? []
         let args=arguments(tools:tools)+rangeArgs+["--no-cache-dir","--no-simulate","--no-overwrites","--progress","--progress-delta","0.25","--format",selector,
             "--merge-output-format","mkv","--output",workspace.appendingPathComponent(range == nil ? "source.%(ext)s" : "source.mkv").path,
@@ -324,8 +372,7 @@ enum URLMediaDownload {
         _=try await ImportProbe.read(file:file,tools:tools)
         try Task.checkCancellation()
         let published=try publish(file:URLMedia.filename(title:media.title),source:file,destination:workspace)
-        completed=true
-        return TemporaryImport(directory:workspace,file:published,range:range,timeline:timeline)
+        return TemporaryImport(workspace:lease,file:published,range:range,timeline:timeline)
     }
 
     static func completedFile(output:Data,workspace:URL) throws -> URL {

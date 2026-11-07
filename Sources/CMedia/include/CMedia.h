@@ -7,6 +7,17 @@ typedef struct ClipRequest ClipRequest;
 ClipRequest *clip_request_create(void);
 void clip_request_free(ClipRequest *request);
 void clip_request_set(ClipRequest *request, int generation);
+int clip_request_current(ClipRequest *request, int generation);
+
+// Independent audio-only peak reader. All calls except cancellation run on one worker.
+typedef struct ClipWaveform ClipWaveform;
+ClipWaveform *clip_waveform_open(const char *path, int stream, double origin,
+                                ClipRequest *request, int generation, char *error, int errorSize);
+// Decode at most 64 packets. Returns 1 for more, 0 for EOF, negative for error/cancel.
+// Caller owns zero-initialized peaks; samples outside [0, binWidth*count) are ignored.
+int clip_waveform_step(ClipWaveform *reader, float *peaks, int count, double binWidth,
+                       double *position, char *error, int errorSize);
+void clip_waveform_close(ClipWaveform *reader);
 typedef struct {
     double duration;
     double origin;

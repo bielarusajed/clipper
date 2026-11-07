@@ -16,6 +16,7 @@ enum { RenderCacheCount=4, RawCacheCount=48, AudioCacheCount=128 };
 ClipRequest *clip_request_create(void) { ClipRequest *r=calloc(1,sizeof(*r)); atomic_init(&r->generation,0); return r; }
 void clip_request_free(ClipRequest *r) { free(r); }
 void clip_request_set(ClipRequest *r,int generation) { atomic_store(&r->generation,generation); }
+int clip_request_current(ClipRequest *r,int generation) { return !r || atomic_load(&r->generation)==generation; }
 
 struct ClipMedia {
     AVFormatContext *format;

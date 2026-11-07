@@ -1,6 +1,6 @@
 # Rough URL range import review
 
-Work is on `feature/url-range-import`, based on planning commit `3f1c9662` and Clipper 0.4.3. No sibling features, merges, pushes or PRs are included.
+The original review build on `feature/url-range-import` is based on planning commit `3f1c9662` and Clipper 0.4.3. Its matching-source receipt identifies commit `b473e02`.
 
 ## Try it
 
@@ -40,3 +40,9 @@ Claude reviewed the implementation and found no blocking issues. The recommended
 External badssl certificate hosts produced inconsistent network responses, so the repeatable trust test uses a private self-signed loopback certificate and requires SecureTransport's certificate-chain rejection. No system trust settings were changed. Valid public HTTPS was tested separately. No universal site compatibility or bandwidth savings are claimed.
 
 The final build receipt in the matching source ZIP identifies the exact commit and every bundled file hash. Both ZIPs are in this worktree's `dist/` folder. Review code: <t3-thread://v2/416a334f-4bfa-4837-9595-1b52af7587d9/thread:delegated-task:command%3Amcp%3Aebf1b6b1-89eb-4806-be1a-2d263b1e6be9%3Adelegate-task%3A5fe9a7b5-8d2a-45fa-8ff9-2addfa0813c0>.
+
+## PR conflict resolution
+
+PR #4 now incorporates `main` at `61d39b1`. The resolution preserves importer tool-refresh recovery, asynchronous cleanup and workspace leases alongside the rough range and timestamp metadata. Editor source reset also preserves export preferences, exported-clip handoff and waveform cleanup. Regression checks cover a queued range surviving tool refresh and an active ranged source surviving abandoned-workspace cleanup.
+
+The merge regression suite passed 82 tests with four optional network tests skipped. A separate run passed both real yt-dlp HTTP range fixtures and local TLS certificate rejection with workspace leases enabled. The existing review ZIPs still represent `b473e02`; this merge updates the PR source without replacing those original review artifacts.
