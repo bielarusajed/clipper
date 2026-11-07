@@ -1,7 +1,10 @@
 import Foundation
 
 enum ExportDestination {
-    static func validate(source:URL,destination:URL) throws {
+    static func validate(source:URL,destination:URL,managedDirectories:[URL]=[TemporaryImport.root]) throws {
+        if isInManagedDirectory(destination,managedDirectories:managedDirectories) {
+            throw ExportFailure.message("Choose a folder outside Clipper's temporary import area so your exported clip is kept.")
+        }
         let input=source.standardizedFileURL.resolvingSymlinksInPath()
         let output=destination.standardizedFileURL.resolvingSymlinksInPath()
         var same=input == output
@@ -16,13 +19,36 @@ enum ExportDestination {
 
     /// The encoder writes beside the destination. Publish only a completed file,
     /// using replacement only when the save panel confirmed an existing output.
-    static func publish(_ temporary:URL,to destination:URL,source:URL,replacingExisting:Bool) throws {
-        try validate(source:source,destination:destination)
+    static func publish(_ temporary:URL,to destination:URL,source:URL,replacingExisting:Bool,managedDirectories:[URL]=[TemporaryImport.root]) throws {
+        try validate(source:source,destination:destination,managedDirectories:managedDirectories)
         let files=FileManager.default
         if replacingExisting && files.fileExists(atPath:destination.path) {
             _=try files.replaceItemAt(destination,withItemAt:temporary,options:.usingNewMetadataOnly)
         } else {
             try files.moveItem(at:temporary,to:destination)
+        }
+    }
+
+    /// Compare existing directory identities, including through symlinks and
+    /// case-insensitive spellings. The output file need not exist yet.
+    static func isInManagedDirectory(_ destination:URL,managedDirectories:[URL]=[TemporaryImport.root]) -> Bool {
+        func identity(_ url:URL) -> String? {
+            guard let attributes=try? FileManager.default.attributesOfItem(atPath:url.path),
+                  let device=attributes[.systemNumber] as? NSNumber,
+                  let inode=attributes[.systemFileNumber] as? NSNumber else { return nil }
+            return "\(device):\(inode)"
+        }
+        let roots=Set(managedDirectories.compactMap { identity($0.resolvingSymlinksInPath()) })
+        var path=destination.deletingLastPathComponent().resolvingSymlinksInPath().standardizedFileURL.path
+        while true {
+            // A missing child may prevent Foundation resolving its symlinked
+            // parent on the first pass. Resolve again as we reach each ancestor,
+            // then walk that directory's real parents rather than the alias's.
+            path=URL(fileURLWithPath:path).resolvingSymlinksInPath().path
+            if let id=identity(URL(fileURLWithPath:path)), roots.contains(id) { return true }
+            let parent=(path as NSString).deletingLastPathComponent
+            if parent.isEmpty || parent == path { return false }
+            path=parent
         }
     }
 }

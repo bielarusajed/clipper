@@ -7,6 +7,7 @@ bash scripts/build-app.sh
 if [[ -d dist/Clipper-Sources ]]; then mv dist/Clipper-Sources ".build/previous-sources-$(uuidgen)"; fi
 mkdir -p dist/Clipper-Sources/Dependencies dist/Clipper-Sources/Recipes
 cp .build/vendor/ffmpeg-8.0.1.tar.xz .build/vendor/dav1d-1.5.4.tar.gz .build/vendor/zimg-3.0.6.tar.gz dist/Clipper-Sources/Dependencies/
+cp .build/media/tls-patch.sha256 patches/ffmpeg-8.0.1-tls-verify-default.patch dist/Clipper-Sources/Dependencies/
 cp .build/media/config.mak .build/media-configure.log dist/Clipper-Sources/Recipes/
 cp scripts/build-*.sh scripts/build-zimg.py scripts/media-pkg-config.sh dist/Clipper-Sources/Recipes/
 cp .build/vendor/{pkgconf-2.3.0,freetype-2.13.3,fribidi-1.0.16,harfbuzz-10.4.0,libass-0.17.3}.tar.xz dist/Clipper-Sources/Dependencies/

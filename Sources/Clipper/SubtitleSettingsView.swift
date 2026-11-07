@@ -43,7 +43,7 @@ struct SubtitleSettingsView:View {
                     if subtitles.unsupported>0 { Text("\(subtitles.unsupported) unsupported container track(s). Bitmap subtitles are not supported.").foregroundStyle(C1.muted) }
                     if subtitles.enabled && details.hdr && !editor.edit.convertToSDR {
                         Text("Burned-in subtitles need Convert to SDR for HDR videos.").fixedSize(horizontal:false,vertical:true)
-                        Button("Convert to SDR") { editor.edit.convertToSDR=true }.controlSize(.small)
+                        Button("Convert to SDR") { editor.setConvertToSDR(true) }.controlSize(.small)
                     }
                     if subtitles.enabled,subtitles.render != nil {
                         Text(subtitles.styled && !subtitles.overrideStyle ? "Authored style · source coordinates" : "Common style · output coordinates").foregroundStyle(C1.muted)

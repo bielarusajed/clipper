@@ -115,7 +115,7 @@ enum SubtitleComposer {
         Style: Default,\(font),\(n(style.size*unit)),\(color(style.color)),\(color(style.color)),\(color(style.outlineColor)),\(color(style.outlineColor)),-1,0,0,0,100,100,0,0,\(style.box ? 3 : 1),\(n(style.outline*unit/5)),\(n(style.shadow*unit/5)),\(style.top ? 8 : 2),\(Int(Double(width)*style.sideMargin/100)),\(Int(Double(width)*style.sideMargin/100)),\(Int(Double(height)*style.margin/100)),1
         [Events]
         Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-        
+
         """
         var fields=[String](),seen=Set<String>(),inEvents=false
         for line in text.components(separatedBy:.newlines) {
@@ -191,7 +191,7 @@ final class SubtitleProcess: @unchecked Sendable {
     private var task:Task<Void,Never>?
     private var epoch=UUID()
     private var video:URL?
-    private var origin=0.0
+    private var externalZero=0.0
     private var size=CGSize(width:1920,height:1080)
     var styled:Bool { sourceKind == .external ? ["ass","ssa"].contains(external?.pathExtension.lowercased() ?? "") : tracks.first(where:{$0.id==track})?.styled == true }
     var ready:Bool { !enabled || (render != nil && !scanning && !preparing && message == nil) }
@@ -201,8 +201,8 @@ final class SubtitleProcess: @unchecked Sendable {
         enabled=false; tracks=[]; unsupported=0; external=nil; render=nil; renderedText=nil; preparationSelection=nil; prepared=nil; directory=nil; video=nil
         scanning=false; preparing=false; message=nil; sourceKind = .external; overrideStyle=false
     }
-    func open(_ video:URL,details:MediaDetails) {
-        reset(); self.video=video; origin=details.origin; scanning=true
+    func open(_ video:URL,details:MediaDetails,timelineOffset:Double=0) {
+        reset(); self.video=video; externalZero=details.origin-timelineOffset; scanning=true
         let token=epoch
         task=Task { [weak self] in
             do {
@@ -266,7 +266,7 @@ final class SubtitleProcess: @unchecked Sendable {
         let token=epoch
         preparationSelection=selection
         guard let video, let dir=directory else { return }
-        let selected=sourceKind, file=external, styled=self.styled, zero=sourceKind == .external ? origin : 0, stream=track
+        let selected=sourceKind, file=external, styled=self.styled, zero=sourceKind == .external ? externalZero : 0, stream=track
         guard selected == .container || file != nil else { message=enabled ? "Choose a subtitle file." : nil; return }
         let snapshot=selected == .external ? file.map { self.snapshot(for:$0) } : nil
         preparing=true

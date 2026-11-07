@@ -8,7 +8,7 @@ ASS/SSA preserves authored styles and positioning by default. Preserved scripts 
 
 Override authored style applies the same common style to ASS/SSA dialogue. It removes positioning, movement, clips, transforms, animation, karaoke, colors and effects. It retains bold, italic, underline, strikeout and line breaks. It omits drawings, initially hidden placeholders, comments and exact duplicate dialogue. Use preserve mode for complex signs and typesetting.
 
-External files are imported as snapshots independent of the active subtitle source. Switching between container tracks and External keeps the imported text even if the original file changes, moves or is deleted. Only an explicit Choose/Change import rereads the file. Clear, closing the video and replacing the video discard the snapshot. External cues are relative to the video's beginning. Container cues retain absolute timestamps; the renderer accounts for the video's origin separately. Trim, crop, codec and audio changes keep the selection. Closing or replacing the source clears it and releases managed files after in-flight readers finish. Common style preferences remain for the current app session.
+External files are imported as snapshots independent of the active subtitle source. Switching between container tracks and External keeps the imported text even if the original file changes, moves or is deleted. Only an explicit Choose/Change import rereads the file. Clear, closing the video and replacing the video discard the snapshot. External cues are relative to the video's beginning. For a verified URL range import, they use original-video time, matching the editor's displayed timestamps. If verification disables the mapping, they use local section time. Container cues retain absolute timestamps; the renderer accounts for the video's origin separately. Trim, crop, codec and audio changes keep the selection. Closing or replacing the source clears it and releases managed files after in-flight readers finish. Common style preferences remain for the current app session.
 
 HDR burn-in requires explicitly choosing Convert to SDR. Export rejects HDR burn-in without it. Source view still shows the original video's colors; encoded preview and export show the existing SDR tone mapping. Text uses the same prepared ASS file, fonts and libass renderer across source view, quality preview and export. Hardware video encoding and source-protection/confirmed-replacement behavior remain in force.
 
@@ -39,7 +39,7 @@ The rotation/VFR/HDR regression cases also use the baseline `.build/fixtures` in
 
 All new media libraries were built privately in this worktree. Unchanged dav1d/zimg inputs were copied from the baseline cache and their install paths made private. Packaging rejects non-system dylibs outside the private media prefix. Shared libraries, licenses, pinned dependency archives and recipes accompany the app. To rebuild the source ZIP, extract `Clipper-source.tar` into a new folder and copy `Dependencies/*` into its `.build/vendor/`, then run the scripts above.
 
-Integration overlaps are `Editor`, `EditorView`, `Viewer`, `Export`, the build recipes and dependency packaging. Main and sibling branches were not changed, merged or pushed.
+Integration overlaps are `Editor`, `EditorView`, `Viewer`, `Export`, the build recipes and dependency packaging. Main and sibling branches were not changed or pushed. The original implementation was independent; the PR integration below subsequently merges current main into this feature branch.
 
 Review artifacts, relative to this worktree:
 
@@ -48,3 +48,25 @@ Review artifacts, relative to this worktree:
 - `dist/Clipper-Subtitles-Sources.zip`
 
 The matching commit is recorded in `Clipper-Sources/COMMIT.txt` inside the source ZIP. Branch: `feature/hardsubs`.
+
+
+## PR conflict resolution
+
+PR #5 incorporates `origin/main` at `1573096`. The merge keeps waveform generation and cleanup, remembered export preferences, exported-clip handoff and source protection, URL range time mapping, importer recovery and workspace leases alongside the subtitle implementation and snapshot fixes.
+
+The editor passes its verified original-time offset to the subtitle controller. External subtitle zero is `details.origin - importTimeline.offset`, so live frames and hardware exports use the same original-video cue clock. Container subtitles retain absolute timestamps with zero 0. The subtitle Convert to SDR action uses the existing preference-aware editor action. Claude checked the integration plan and combined editor hooks without finding a blocking issue.
+
+The private media engine was rebuilt with both libass and main's HTTPS/SecureTransport configuration, including the certificate-verification patch. The cache check now requires both sets of capabilities. Matching sources include that patch and its hash receipt.
+
+The merge suite ran 112 tests with zero failures and four optional network tests skipped. A separate opt-in loopback TLS test passed and confirmed untrusted certificate rejection. The suite covers the existing subtitle and source-protection tests plus waveform, preference/handoff, URL range/import, workspace and editor regressions. Three added integration cases cover actual trimmed hardware subtitle output from an original-time range, waveform/audio-track changes retaining subtitle selection, and preference-aware HDR-to-SDR controls. Logs are `.build/hardsubs-merge-tests.log` and `.build/hardsubs-merge-tls-tests.log`.
+
+Reproduce the merge checks with:
+
+```sh
+bash scripts/make-waveform-fixtures.sh
+bash scripts/test.sh --filter 'SubtitleTests|WaveformTests|ExportPreferencesTests|ExportHandoffTests|URLRangeTests|URLImportTests|ImportWorkspaceTests|ManagedImportToolsTests|PasteImportTests|TimelineTests|EditorWindowTests|MediaTests.testExportProtectsSourceThroughSymlinksAndHardLinks|MediaTests.testPublishingDoesNotReplaceWithoutConsentOrWhenNewFileIsMissing|MediaTests.testConfirmedExportReplacesOnlyAfterSuccessAndCancellationKeepsOutput|MediaTests.testHDRPreserveAndSDRConversion'
+CLIPPER_RANGE_NETWORK_TEST=1 bash scripts/test.sh --filter URLRangeTests.testNetworkBuildRejectsBadCertificatesByDefault
+bash scripts/check-media.sh
+```
+
+The review ZIPs above are rebuilt for the merge commit. Their matching source receipt identifies the exact revision. Native interactive popover and playback review remains manual.

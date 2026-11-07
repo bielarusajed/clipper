@@ -6,6 +6,10 @@ import CMedia
 struct Timeline:View {
     @ObservedObject var editor:Editor
     @ObservedObject var playback:Playback
+    @ObservedObject var waveform:AudioWaveform
+    init(editor:Editor,playback:Playback) {
+        self.editor=editor; self.playback=playback; waveform=editor.waveform
+    }
     @State private var visibleStart=0.0
     @State private var visibleEnd=0.0
     @State private var panTarget:Double?
@@ -23,7 +27,13 @@ struct Timeline:View {
                     Button { editor.stepFrame(1) } label: { keycap("→") }.help("Next frame (→)")
                     Text("Step a frame").font(.system(size:9)).foregroundStyle(C1.muted)
                 }.buttonStyle(.plain)
-                Spacer()
+                Spacer(minLength:4)
+                if !(editor.details?.audioLabels.isEmpty ?? true) {
+                    Toggle(isOn:$editor.waveformVisible) { Image(systemName:"waveform") }
+                        .toggleStyle(.button).controlSize(.mini)
+                        .accessibilityLabel("Show audio waveform")
+                        .help("Show the selected audio track below the filmstrip")
+                }
                 Image(systemName:"minus.magnifyingglass")
                 Slider(value:$editor.timelineZoom,in:0...editor.maximumTimelineZoom).frame(width:115).controlSize(.mini).help("Zoom the timeline (⌘+/⌘− or pinch)")
                 Image(systemName:"plus.magnifyingglass")
@@ -59,11 +69,11 @@ struct Timeline:View {
                 .accessibilityHint("Click or drag to move the detailed timeline")
             }.frame(height:9)
             HStack {
-                Text("00:00")
+                Text(TimeText.format(editor.displayTime(0)).dropLast(4))
                 Spacer()
-                Text("Whole video")
+                Text(editor.importTimeNote == nil ? "Whole video" : "Imported section")
                 Spacer()
-                Text(TimeText.format(editor.details?.duration ?? 0).dropLast(4))
+                Text(TimeText.format(editor.displayTime(editor.details?.duration ?? 0)).dropLast(4))
             }.font(.system(size:8)).foregroundStyle(C1.muted).monospacedDigit()
         }
     }
@@ -96,8 +106,15 @@ struct TimelineSurface:NSViewRepresentable {
         let changed=abs(view.frame.width-width)>1
         let center=scroll.contentView.bounds.midX/max(1,view.frame.width)
         let moved=abs(view.position-position)>0.000001
+        view.displayOffset=editor.timeDisplayOffset
         view.duration=duration; view.start=editor.inTime; view.end=editor.outTime; view.position=position
         view.enabled = !editor.exporting && !editor.loading
+        view.waveformVisible=editor.waveformVisible && !(editor.details?.audioLabels.isEmpty ?? true)
+        view.waveform=editor.waveform.peaks
+        view.waveformMuted=editor.edit.muted
+        view.waveformStatus=editor.waveform.failure != nil ? "Waveform unavailable. Toggle off and on to retry." :
+            editor.waveform.paused ? "Waveform paused while editing or playing" :
+            "Generating waveform \(Int(editor.waveform.progress*100))%"
         view.setBusy(busy); view.setFrameSize(CGSize(width:width,height:84)); view.setSource(editor.source)
         var target:Double?
         if changed { target=zoom>view.zoom ? position : center*duration }
@@ -143,7 +160,12 @@ final class TimelineScrollView:NSScrollView {
 final class TimelineCanvas:NSView {
     override var isFlipped:Bool { true }
     var duration=1.0, start=0.0, end=1.0, position=0.0, zoom=1.0
+    var displayOffset=0.0
     var enabled=true
+    var waveformVisible=false
+    var waveform:WaveformPeaks?
+    var waveformMuted=false
+    var waveformStatus=""
     var seek:((Double)->Void)?
     var setStart:((Double)->Void)?
     var setEnd:((Double)->Void)?
@@ -193,34 +215,61 @@ final class TimelineCanvas:NSView {
         while t <= time(visible.maxX)+step {
             let xx=x(t)
             NSColor.separatorColor.setStroke(); let p=NSBezierPath(); p.move(to:CGPoint(x:xx,y:18)); p.line(to:CGPoint(x:xx,y:23)); p.stroke()
-            let label=TimeText.format(t)
+            let label=TimeText.format(t+displayOffset)
             (label as NSString).draw(at:CGPoint(x:xx+3,y:2),withAttributes:attrs)
             t += step
         }
         // Thumbnails are sparse and cached. Drawing only the visible rect supports deep zoom.
         let thumbWidth=96.0
+        let thumbHeight=waveformVisible ? 30.0 : 45.0
         let from=Int(visible.minX/thumbWidth), to=Int(visible.maxX/thumbWidth)
         if from <= to {
             for n in from...to {
                 let thumbTime=time(Double(n)*thumbWidth)
                 let key=Int((thumbTime*1000).rounded())
-                let rect=CGRect(x:Double(n)*thumbWidth,y:24,width:thumbWidth-1,height:45)
-                if let image=images[key] { image.draw(in:rect,from:.zero,operation:.sourceOver,fraction:1,respectFlipped:true,hints:nil) }
+                let rect=CGRect(x:Double(n)*thumbWidth,y:24,width:thumbWidth-1,height:thumbHeight)
+                if let image=images[key] {
+                    // Centre-crop to preserve the image's proportions in the shorter strip.
+                    let size=image.size, ratio=rect.width/rect.height
+                    let crop=waveformVisible ? (size.width/size.height>ratio ? CGSize(width:size.height*ratio,height:size.height) : CGSize(width:size.width,height:size.width/ratio)) : size
+                    image.draw(in:rect,from:CGRect(x:(size.width-crop.width)/2,y:(size.height-crop.height)/2,width:crop.width,height:crop.height),operation:.sourceOver,fraction:1,respectFlipped:true,hints:nil)
+                }
                 else { NSColor.quaternaryLabelColor.setFill(); rect.fill(); fetch(thumbTime,key:key) }
+            }
+        }
+        let bottom=waveformVisible ? 80.0 : 69.0
+        if waveformVisible {
+            let rect=CGRect(x:visible.minX,y:56,width:visible.width,height:24)
+            NSColor.quaternaryLabelColor.withAlphaComponent(0.2).setFill(); rect.fill()
+            if let waveform {
+                let bars=NSBezierPath()
+                let scale=max(1,window?.backingScaleFactor ?? 1), pixel=1/scale
+                var xx=floor(visible.minX*scale)/scale
+                while xx<visible.maxX {
+                    let peak=waveform.peak(from:xx/bounds.width*duration,to:(xx+pixel)/bounds.width*duration)
+                    let height=WaveformPeaks.height(peak)*11
+                    if height>0 { bars.move(to:CGPoint(x:xx,y:68-height)); bars.line(to:CGPoint(x:xx,y:68+height)) }
+                    xx += pixel
+                }
+                NSColor.secondaryLabelColor.withAlphaComponent(waveformMuted ? 0.35 : 0.8).setStroke()
+                bars.lineWidth=pixel; bars.stroke()
+                NSColor.separatorColor.setFill(); CGRect(x:visible.minX,y:68,width:visible.width,height:pixel).fill()
+            } else {
+                (waveformStatus as NSString).draw(at:CGPoint(x:visibleRect.minX+8,y:60),withAttributes:[.font:NSFont.systemFont(ofSize:10),.foregroundColor:NSColor.secondaryLabelColor])
             }
         }
         let left=x(start), right=x(end)
         NSColor.windowBackgroundColor.withAlphaComponent(0.65).setFill()
-        CGRect(x:0,y:24,width:left,height:45).intersection(dirtyRect).fill()
-        CGRect(x:right,y:24,width:max(0,bounds.width-right),height:45).intersection(dirtyRect).fill()
+        CGRect(x:0,y:24,width:left,height:bottom-24).intersection(dirtyRect).fill()
+        CGRect(x:right,y:24,width:max(0,bounds.width-right),height:bottom-24).intersection(dirtyRect).fill()
         C1.selection.setStroke()
-        let selection=NSBezierPath(rect:CGRect(x:left,y:23,width:max(2,right-left),height:47)); selection.lineWidth=2; selection.stroke()
+        let selection=NSBezierPath(rect:CGRect(x:left,y:23,width:max(2,right-left),height:bottom-22)); selection.lineWidth=2; selection.stroke()
         for xx in [left,right] where xx >= visible.minX-5 && xx <= visible.maxX+5 {
-            C1.selection.setFill(); NSBezierPath(roundedRect:CGRect(x:xx-4,y:22,width:8,height:49),xRadius:2,yRadius:2).fill()
+            C1.selection.setFill(); NSBezierPath(roundedRect:CGRect(x:xx-4,y:22,width:8,height:bottom-20),xRadius:2,yRadius:2).fill()
             NSColor.white.withAlphaComponent(0.8).setFill(); CGRect(x:xx-0.5,y:37,width:1,height:18).fill()
         }
         let playhead=x(position)
-        C1.playhead.setStroke(); let line=NSBezierPath(); line.move(to:CGPoint(x:playhead,y:19)); line.line(to:CGPoint(x:playhead,y:74)); line.lineWidth=1.5; line.stroke()
+        C1.playhead.setStroke(); let line=NSBezierPath(); line.move(to:CGPoint(x:playhead,y:19)); line.line(to:CGPoint(x:playhead,y:bottom+3)); line.lineWidth=1.5; line.stroke()
         C1.playhead.setFill(); let tip=NSBezierPath(); tip.move(to:CGPoint(x:playhead-4,y:18)); tip.line(to:CGPoint(x:playhead+4,y:18)); tip.line(to:CGPoint(x:playhead,y:23)); tip.close(); tip.fill()
     }
     private func fetch(_ time:Double,key:Int) {

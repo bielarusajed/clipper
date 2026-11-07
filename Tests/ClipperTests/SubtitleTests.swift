@@ -378,3 +378,75 @@ extension SubtitleTests {
         XCTAssertNil(c.render); XCTAssertTrue(c.message?.contains("missing") == true)
     }
 }
+
+extension SubtitleTests {
+    @MainActor func testMergedRangeImportUsesOriginalSubtitleClockInPreviewAndExport() async throws {
+        let directory=try SubtitleDirectory(),importDirectory=directory.url.appendingPathComponent("Imported")
+        try FileManager.default.createDirectory(at:importDirectory,withIntermediateDirectories:true)
+        let source=importDirectory.appendingPathComponent("source.mkv"),d=try details("offset-tracks.mkv")
+        try FileManager.default.copyItem(at:fixture("offset-tracks.mkv"),to:source)
+        let imported=TemporaryImport(directory:importDirectory,file:source,range:try ImportRange(start:100,end:108),timeline:ImportTimeline(offset:100,localOrigin:d.origin))
+        let suite="app.clipper.tests.subtitle-merge.\(UUID().uuidString)",defaults=try XCTUnwrap(UserDefaults(suiteName:suite))
+        defer { defaults.removePersistentDomain(forName:suite) }
+        let editor=Editor(preferences:ExportPreferences(defaults:defaults))
+        editor.open(source,temporary:imported); defer { editor.close() }
+        try await wait { !editor.loading && !editor.playback.seeking && !editor.subtitles.scanning }
+        let file=directory.url.appendingPathComponent("original-times.srt")
+        try "1\n00:01:42,000 --> 00:01:44,000\nOriginal clock\n".write(to:file,atomically:true,encoding:.utf8)
+        editor.subtitles.enabled=true; editor.importSubtitles(file)
+        try await wait { !editor.subtitles.preparing }
+        let asset=try XCTUnwrap(editor.subtitles.render)
+        XCTAssertEqual(editor.displayTime(2.5),102.5)
+        XCTAssertEqual(asset.zero,d.origin-100)
+        editor.seek(2.5); try await wait { !editor.playback.seeking }
+        let ms=asset.milliseconds(frame:editor.playback.frame,relativeTime:editor.playback.position,origin:d.origin)
+        XCTAssertEqual(ms,102500)
+        let renderer=try XCTUnwrap(clip_subtitles_open(asset.file.path,asset.fonts.path)); defer { clip_subtitles_free(renderer) }
+        var x:Int32=0,y:Int32=0,changed:Int32=0
+        XCTAssertNotNil(clip_subtitles_render(renderer,ms,640,360,&x,&y,&changed)?.takeRetainedValue())
+        editor.markStart(1); try await wait { !editor.playback.seeking }
+        editor.markEnd(4.99); try await wait { !editor.playback.seeking }
+        let output=directory.url.appendingPathComponent("mapped-output.mp4")
+        editor.export(to:output,replacingExisting:false); try await wait { !editor.exporting }
+        XCTAssertNil(editor.error); XCTAssertEqual(editor.exportedClip.url,output)
+        XCTAssertLessThan(try luminance(output,time:0.5).max() ?? 255,30)
+        XCTAssertGreaterThan(try luminance(output,time:1.5).max() ?? 0,180)
+        XCTAssertLessThan(try luminance(output,time:3.5).max() ?? 255,30)
+        editor.subtitles.sourceKind = .container; editor.subtitles.sourceSelectionChanged()
+        try await wait { !editor.subtitles.preparing }
+        XCTAssertEqual(editor.subtitles.render?.zero,0,"Container timestamps stay in their own absolute clock")
+    }
+    @MainActor func testMergedWaveformAndPreferenceHooksKeepSubtitleSelection() async throws {
+        let suite="app.clipper.tests.subtitle-merge.\(UUID().uuidString)",defaults=try XCTUnwrap(UserDefaults(suiteName:suite))
+        defer { defaults.removePersistentDomain(forName:suite) }
+        let preferences=ExportPreferences(defaults:defaults); preferences.setCodec(.hevc); preferences.setQuality(81)
+        let editor=Editor(preferences:preferences); editor.waveformVisible=true
+        editor.open(root.appendingPathComponent(".build/fixtures/waveform-offset.mkv"))
+        defer { editor.close(); editor.waveform.cancelAndWait() }
+        try await wait { !editor.loading && !editor.playback.seeking && !editor.subtitles.scanning && editor.waveform.peaks != nil }
+        XCTAssertEqual(editor.edit.codec,.hevc); XCTAssertEqual(editor.edit.quality,81)
+        editor.subtitles.enabled=true; editor.importSubtitles(fixture("dialogue.srt"))
+        try await wait { !editor.subtitles.preparing }
+        let asset=try XCTUnwrap(editor.subtitles.render)
+        let previous=editor.edit; editor.edit.audioTrack=1; editor.settingsChanged(previous)
+        try await wait { !editor.playback.seeking && editor.waveform.peaks != nil }
+        XCTAssertEqual(editor.subtitles.external,fixture("dialogue.srt"))
+        XCTAssertEqual(editor.subtitles.render?.identity,asset.identity)
+        XCTAssertTrue(editor.canExport)
+        editor.close()
+        XCTAssertNil(editor.subtitles.render); XCTAssertNil(editor.subtitles.external); XCTAssertNil(editor.waveform.peaks)
+        XCTAssertEqual(editor.edit,preferences.makeSettings())
+    }
+    @MainActor func testMergedSubtitleSDRActionRestoresPreferredCodec() async throws {
+        let suite="app.clipper.tests.subtitle-merge.\(UUID().uuidString)",defaults=try XCTUnwrap(UserDefaults(suiteName:suite))
+        defer { defaults.removePersistentDomain(forName:suite) }
+        let preferences=ExportPreferences(defaults:defaults),editor=Editor(preferences:ExportPreferences(defaults:defaults))
+        editor.open(root.appendingPathComponent(".build/fixtures/hdr.mp4")); defer { editor.close() }
+        try await wait { !editor.loading && !editor.playback.seeking && !editor.subtitles.scanning }
+        editor.subtitles.enabled=true; editor.importSubtitles(fixture("dialogue.srt")); try await wait { !editor.subtitles.preparing }
+        XCTAssertEqual(editor.edit.codec,.hevc); XCTAssertFalse(editor.canExport)
+        let previous=editor.edit; editor.setConvertToSDR(true); editor.settingsChanged(previous)
+        XCTAssertEqual(editor.edit.codec,preferences.codec); XCTAssertEqual(editor.edit.codec,.h264)
+        XCTAssertTrue(editor.canExport)
+    }
+}
