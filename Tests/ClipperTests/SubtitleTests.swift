@@ -76,6 +76,26 @@ final class SubtitleTests:XCTestCase {
             c.reset()
         }
     }
+    @MainActor func testCropUndoRebuildsSubtitleGeometryWithoutRecentring() async throws {
+        let editor=Editor(); defer { editor.close() }
+        editor.open(fixture("black.mp4"))
+        try await wait { !editor.loading && !editor.playback.seeking && !editor.subtitles.scanning }
+        editor.subtitles.enabled=true; editor.importSubtitles(fixture("dialogue.srt"))
+        try await wait { !editor.subtitles.preparing }
+        let original=try String(contentsOf:XCTUnwrap(editor.subtitles.render).file,encoding:.utf8)
+        editor.updateSettings("Crop") { $0.cropPreset = .vertical }
+        let preset=editor.edit
+        let cropped=try String(contentsOf:XCTUnwrap(editor.subtitles.render).file,encoding:.utf8)
+        XCTAssertNotEqual(cropped,original)
+        editor.updateSettings("Crop") { $0.crop.origin.x=0.1 }
+        editor.undoEdit(); try await wait { !editor.playback.seeking }
+        XCTAssertEqual(editor.edit,preset)
+        XCTAssertEqual(try String(contentsOf:XCTUnwrap(editor.subtitles.render).file,encoding:.utf8),cropped)
+        editor.undoEdit(); try await wait { !editor.playback.seeking }
+        XCTAssertEqual(try String(contentsOf:XCTUnwrap(editor.subtitles.render).file,encoding:.utf8),original)
+        editor.redoEdit(); try await wait { !editor.playback.seeking }
+        XCTAssertEqual(try String(contentsOf:XCTUnwrap(editor.subtitles.render).file,encoding:.utf8),cropped)
+    }
     @MainActor func testLateCueRetainsTimingAndMissingUnsupportedFilesBlock() async throws {
         let c=try await controller("dialogue.srt")
         let asset=try XCTUnwrap(c.render),text=try String(contentsOf:asset.file,encoding:.utf8)
@@ -428,7 +448,7 @@ extension SubtitleTests {
         editor.subtitles.enabled=true; editor.importSubtitles(fixture("dialogue.srt"))
         try await wait { !editor.subtitles.preparing }
         let asset=try XCTUnwrap(editor.subtitles.render)
-        let previous=editor.edit; editor.edit.audioTrack=1; editor.settingsChanged(previous)
+        editor.updateSettings("Audio Track") { $0.audioTrack=1 }
         try await wait { !editor.playback.seeking && editor.waveform.peaks != nil }
         XCTAssertEqual(editor.subtitles.external,fixture("dialogue.srt"))
         XCTAssertEqual(editor.subtitles.render?.identity,asset.identity)
@@ -445,7 +465,7 @@ extension SubtitleTests {
         try await wait { !editor.loading && !editor.playback.seeking && !editor.subtitles.scanning }
         editor.subtitles.enabled=true; editor.importSubtitles(fixture("dialogue.srt")); try await wait { !editor.subtitles.preparing }
         XCTAssertEqual(editor.edit.codec,.hevc); XCTAssertFalse(editor.canExport)
-        let previous=editor.edit; editor.setConvertToSDR(true); editor.settingsChanged(previous)
+        editor.setConvertToSDR(true)
         XCTAssertEqual(editor.edit.codec,preferences.codec); XCTAssertEqual(editor.edit.codec,.h264)
         XCTAssertTrue(editor.canExport)
     }

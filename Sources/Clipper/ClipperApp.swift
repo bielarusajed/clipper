@@ -13,6 +13,7 @@ import AppKit
         .defaultSize(width:EditorWindowLayout.starterSize.width,height:EditorWindowLayout.starterSize.height)
         .windowStyle(.titleBar)
         .commands {
+            EditHistoryCommands(editor:editor)
             CommandGroup(replacing:.newItem) {
                 Button("Open Video…") { editor.openPanel() }.keyboardShortcut("o").disabled(editor.exporting)
                 Button("Import URL…") { editor.showURLImporter() }.keyboardShortcut("o",modifiers:[.command,.shift]).disabled(editor.exporting)
@@ -96,5 +97,32 @@ import AppKit
             return .terminateLater
         }
         editor?.prepareToQuit(); return .terminateNow
+    }
+}
+
+/// Menu shortcuts route text editing through AppKit and complete edits through our manager.
+struct EditHistoryCommands:Commands {
+    @ObservedObject var editor:Editor
+    func usesTextUndo(in window:NSWindow?)->Bool { window?.firstResponder is NSText || window is NSPanel }
+    func isEnabled(redo:Bool,in window:NSWindow?)->Bool {
+        usesTextUndo(in:window) || (redo ? editor.canRedo : editor.canUndo)
+    }
+    private var nativeText:Bool { usesTextUndo(in:NSApp.keyWindow) }
+    var body:some Commands {
+        CommandGroup(replacing:.undoRedo) {
+            Button(nativeText ? "Undo" : editor.editUndoManager.undoMenuItemTitle) { perform(redo:false) }
+                .keyboardShortcut("z")
+                .disabled(!isEnabled(redo:false,in:NSApp.keyWindow))
+            Button(nativeText ? "Redo" : editor.editUndoManager.redoMenuItemTitle) { perform(redo:true) }
+                .keyboardShortcut("z",modifiers:[.command,.shift])
+                .disabled(!isEnabled(redo:true,in:NSApp.keyWindow))
+        }
+    }
+    func perform(redo:Bool,in window:NSWindow?=NSApp.keyWindow) {
+        if usesTextUndo(in:window) {
+            let action=NSSelectorFromString(redo ? "redo:" : "undo:")
+            NSApp.sendAction(action,to:window,from:nil)
+        } else if redo { editor.redoEdit() }
+        else { editor.undoEdit() }
     }
 }

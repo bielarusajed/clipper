@@ -103,9 +103,7 @@ final class ExportPreferencesTests:XCTestCase {
         XCTAssertEqual(editor.edit.codec,.hevc)
         XCTAssertEqual(preferences.codec,.h264)
         // Also exercise the existing normalization safety net.
-        let previous=editor.edit
-        editor.edit.codec = .h264
-        editor.settingsChanged(previous)
+        editor.updateSettings("Codec") { $0.codec = .h264 }
         XCTAssertEqual(editor.edit.codec,.hevc)
         XCTAssertEqual(preferences.codec,.h264)
         editor.open(fixture("cfr.mp4"))
@@ -126,10 +124,11 @@ final class ExportPreferencesTests:XCTestCase {
         editor.setCodec(.hevc); editor.setQuality(91)
         editor.setConvertToSDR(false); editor.setConvertToSDR(true)
         XCTAssertEqual(editor.edit.codec,.hevc,"An explicit codec choice during SDR conversion is remembered")
-        editor.edit.cropPreset = .square
-        editor.edit.crop=CGRect(x:0.1,y:0.1,width:0.5,height:0.5)
-        editor.edit.resolution = .tiny
-        editor.edit.muted=true; editor.edit.audioTrack=5
+        editor.updateSettings("Crop") { $0.cropPreset = .square }
+        editor.updateSettings("Per-video settings") {
+            $0.crop=CGRect(x:0.1,y:0.1,width:0.5,height:0.5)
+            $0.resolution = .tiny; $0.muted=true; $0.audioTrack=5
+        }
         editor.open(fixture("cfr.mp4"))
         try await waitUntil { editor.canExport }
         XCTAssertEqual(editor.edit,preferences.makeSettings())
@@ -146,6 +145,37 @@ final class ExportPreferencesTests:XCTestCase {
         XCTAssertEqual(reopened.edit.quality,91)
     }
 
+    @MainActor func testUndoRedoPersistsRestoredCodecAndQualityChoices() async throws {
+        let editor=Editor(preferences:preferences)
+        defer { editor.close() }
+        editor.open(fixture("cfr.mp4")); try await waitUntil { editor.canExport }
+        editor.setCodec(.hevc)
+        let gesture=try XCTUnwrap(editor.beginEditGesture("Quality"))
+        for quality in 70...82 { editor.setQuality(Double(quality),gesture:gesture) }
+        editor.endEditGesture(gesture)
+        editor.undoEdit(); try await waitUntil { editor.canExport }
+        XCTAssertEqual(editor.edit.quality,65); XCTAssertEqual(preferences.quality,65)
+        editor.undoEdit(); try await waitUntil { editor.canExport }
+        XCTAssertEqual(editor.edit.codec,.h264); XCTAssertEqual(preferences.codec,.h264)
+        XCTAssertFalse(editor.canUndo)
+        editor.redoEdit(); try await waitUntil { editor.canExport }
+        editor.redoEdit(); try await waitUntil { editor.canExport }
+        XCTAssertEqual(preferences.codec,.hevc); XCTAssertEqual(preferences.quality,82)
+        editor.open(fixture("cfr.mp4")); try await waitUntil { editor.canExport }
+        XCTAssertEqual(editor.edit.codec,.hevc); XCTAssertEqual(editor.edit.quality,82)
+        XCTAssertFalse(editor.canUndo)
+    }
+    @MainActor func testUndoHDRConversionDoesNotPersistForcedHEVC() async throws {
+        let editor=Editor(preferences:preferences)
+        defer { editor.close() }
+        editor.open(fixture("hdr.mp4")); try await waitUntil { editor.canExport }
+        editor.setConvertToSDR(true); editor.setCodec(.hevc)
+        editor.undoEdit(); try await waitUntil { editor.canExport }
+        XCTAssertEqual(editor.edit.codec,.h264); XCTAssertEqual(preferences.codec,.h264)
+        editor.undoEdit(); try await waitUntil { editor.canExport }
+        XCTAssertEqual(editor.edit.codec,.hevc); XCTAssertFalse(editor.edit.convertToSDR)
+        XCTAssertEqual(preferences.codec,.h264)
+    }
     @MainActor func testLocalOneClickExportStaysBesideSourceAndDoesNotRecordAFolder() async throws {
         let local=root.appendingPathComponent("Local",isDirectory:true)
         try FileManager.default.createDirectory(at:local,withIntermediateDirectories:true)

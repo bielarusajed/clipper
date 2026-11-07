@@ -94,7 +94,8 @@ struct TimelineSurface:NSViewRepresentable {
         scroll.drawsBackground=false; scroll.verticalScrollElasticity = .none
         let view=TimelineCanvas(frame:CGRect(x:0,y:0,width:800,height:84))
         scroll.documentView=view
-        view.seek={ editor.seek($0) }; view.setStart={ editor.markStart($0) }; view.setEnd={ editor.markEnd($0) }
+        view.seek={ editor.seek($0) }; view.setStart={ editor.markStart($0,gesture:$1) }; view.setEnd={ editor.markEnd($0,gesture:$1) }
+        view.beginTrim={ editor.beginEditGesture("Trim") }; view.endTrim={ editor.endEditGesture($0) }
         context.coordinator.observe(scroll)
         return scroll
     }
@@ -167,8 +168,12 @@ final class TimelineCanvas:NSView {
     var waveformMuted=false
     var waveformStatus=""
     var seek:((Double)->Void)?
-    var setStart:((Double)->Void)?
-    var setEnd:((Double)->Void)?
+    var setStart:((Double,UUID?)->Void)?
+    var setEnd:((Double,UUID?)->Void)?
+    var beginTrim:(()->UUID?)?
+    var endTrim:((UUID?)->Void)?
+    private var trimGesture:UUID?
+    override var acceptsFirstResponder:Bool { true }
     private var dragMode=0
     private var lastDrag=Date.distantPast
     private var url:URL?
@@ -303,8 +308,10 @@ final class TimelineCanvas:NSView {
     }
     override func mouseDown(with event:NSEvent) {
         guard enabled else { return }
+        window?.makeFirstResponder(self)
         let point=convert(event.locationInWindow,from:nil)
         dragMode=abs(point.x-x(start)) < 9 ? 1 : abs(point.x-x(end)) < 9 ? 2 : 0
+        if dragMode != 0 { trimGesture=beginTrim?() }
         perform(point.x)
     }
     override func mouseDragged(with event:NSEvent) {
@@ -312,9 +319,16 @@ final class TimelineCanvas:NSView {
         autoscroll(with:event)
         if Date().timeIntervalSince(lastDrag)>0.09 { perform(convert(event.locationInWindow,from:nil).x); lastDrag=Date() }
     }
-    override func mouseUp(with event:NSEvent) { if enabled { perform(convert(event.locationInWindow,from:nil).x) } }
+    override func mouseUp(with event:NSEvent) {
+        if enabled { perform(convert(event.locationInWindow,from:nil).x) }
+        endTrim?(trimGesture); trimGesture=nil; dragMode=0
+    }
+    override func viewWillMove(toWindow newWindow:NSWindow?) {
+        if newWindow == nil { endTrim?(trimGesture); trimGesture=nil }
+        super.viewWillMove(toWindow:newWindow)
+    }
     private func perform(_ point:Double) {
         let t=time(point)
-        switch dragMode { case 1: setStart?(min(t,end-0.001)); case 2: setEnd?(max(t,start)); default: seek?(t) }
+        switch dragMode { case 1: if let trimGesture { setStart?(min(t,end-0.001),trimGesture) }; case 2: if let trimGesture { setEnd?(max(t,start),trimGesture) }; default: seek?(t) }
     }
 }

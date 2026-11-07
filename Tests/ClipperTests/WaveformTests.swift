@@ -154,7 +154,7 @@ final class WaveformTests:XCTestCase {
         XCTAssertLessThan(duration,5.1,"Use the editor's corrected video duration")
         XCTAssertEqual(try onset(XCTUnwrap(editor.waveform.peaks),near:1.35),1.35,accuracy:0.005)
         editor.timelineZoom=8
-        let previous=editor.edit; editor.edit.audioTrack=1; editor.settingsChanged(previous)
+        editor.updateSettings("Audio Track") { $0.audioTrack=1 }
         try await waitUntil { !editor.playback.seeking && editor.waveform.peaks != nil }
         XCTAssertEqual(try onset(XCTUnwrap(editor.waveform.peaks),near:2.1),2.1,accuracy:0.005)
         editor.close(); XCTAssertNil(editor.waveform.peaks)
