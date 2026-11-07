@@ -11,7 +11,7 @@ enum EditorWindowLayout {
     static let sidebarWidth:CGFloat=288
     static let selectorHeight:CGFloat=30
     static let transportHeight:CGFloat=27
-    static let timelineHeight:CGFloat=144
+    static let timelineHeight:CGFloat=156
     static let timelineSpacing:CGFloat=9
     static let timelinePadding:CGFloat=12
 

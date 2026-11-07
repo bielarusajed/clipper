@@ -16,8 +16,9 @@ final class EditorWindowTests:XCTestCase {
             XCTAssertEqual(portrait.height,available.height,accuracy:1)
         }
         let wide=EditorWindowLayout.videoSize(width:1180,aspectRatio:2.4,available:CGSize(width:1512,height:900))
+        let landscape=EditorWindowLayout.videoSize(width:1180,aspectRatio:16/9,available:CGSize(width:1512,height:900))
         XCTAssertEqual(wide.width,1180)
-        XCTAssertLessThan(wide.height,650)
+        XCTAssertLessThan(wide.height,landscape.height)
     }
 
     @MainActor func testNativeEditorFitsVideoResizesAndReturnsToStarter() async throws {

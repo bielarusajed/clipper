@@ -14,7 +14,7 @@ struct Timeline:View {
             overview
             TimelineSurface(editor:editor,position:editor.displayedPosition,zoom:pow(2,editor.timelineZoom),busy:playback.playing || playback.seeking || editor.previewPlaying || editor.comparisonPreparing,panTarget:panTarget) { start,end in
                 visibleStart=start; visibleEnd=end
-            }.frame(height:92)
+            }.frame(height:104) // Fits the 84-point canvas plus the legacy scrollbar.
             HStack(spacing:7) {
                 keyHint("I","Set start")
                 keyHint("O","Set end")
