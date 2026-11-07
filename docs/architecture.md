@@ -1,0 +1,51 @@
+# Architecture and UI decisions
+
+## Product boundaries
+
+Clipper edits one local or URL-imported video and exports one selected MP4 clip at a time. Frame selection follows decoded presentation timestamps, including variable-frame-rate sources. Start and End are the first and last included frames. Export translates the last frame into an exclusive boundary and re-encodes the selected picture with source timing.
+
+The controls expose crop, downscale, hardware H.264/HEVC, one quality value, audio selection/mute and optional subtitle burn-in. Frame rate is preserved. There is no proxy preparation step, software video encoding fallback, lossless smart cut, multi-range queue or session recovery.
+
+## Media path
+
+SwiftUI and AppKit provide the shell. `Sources/CMedia/CMedia.m` owns libav demux/decode, exact decoded-frame selection and bounded video/audio caches. `CWaveform.m` extracts audio peaks and `Subtitles.m` handles subtitle discovery and libass rendering. Software decode is allowed when the hardware cannot decode a source codec, including AV1 on M1.
+
+`Playback.swift` sends source frames and PCM to AVSampleBufferDisplayLayer and AVSampleBufferAudioRenderer on one AVSampleBufferRenderSynchronizer. Warm pause/resume retains queued samples and the last image. `LoopPreparation.swift` prepares a second decoder for the next loop pass; bounded cached passes cover very short selections. Generation/cancellation checks reject stale seek, loop and source-load results.
+
+`Export.swift` invokes the bundled LGPL FFmpeg helper using the same source timestamps and decoded-frame boundaries. VideoToolbox encoders run with `allow_sw=0`. Crop/scale never enlarges the crop. Audio is trimmed and re-encoded to stereo AAC. HDR uses HEVC Main10; explicit SDR conversion tone-maps it. HDR subtitle burn-in currently requires SDR conversion.
+
+A five-second quality preview uses the export pipeline. AVPlayer displays that finished MP4. In Compare, the encoded sample drives the clock while coalesced source-frame requests follow it. Paused seeks and steps align both pictures to decoded source boundaries. One persistent source display layer and one encoded layer share crop geometry; moving the wipe updates existing layers without animations or duplication.
+
+`Subtitles.swift` discovers container text tracks and imports external SRT/WebVTT/ASS/SSA into owned snapshots. libass supplies the live overlay and export burn-in. Authored ASS layout uses source coordinates; common/override styling uses output coordinates. Jobs retain their own snapshots and fonts so asynchronous replacements do not delete files still in use.
+
+## Editor state and persistence
+
+`Editor.swift` coordinates source lifetime, trim, settings, transport, previews, export and feature controllers. Atomic settings updates normalize crop geometry once and refresh dependent preview, waveform and subtitle work. Undo snapshots retain exact trim frames and settings; one completed gesture creates one undo entry. The edit UndoManager is separate from AppKit text undo and clears when the source changes. Subtitle controls and navigation are outside that history.
+
+`ExportPreferences.swift` persists explicit codec/quality choices and the last confirmed save folder. Automatic HDR codec selection never overwrites the SDR preference. Per-video trim, crop, resolution and audio reset on open. Save As remembers its folder on confirmation even if rendering later fails.
+
+`ExportHandoff.swift` provides file pasteboard/drag items and Finder reveal for the completed output. Publication protects source paths and file identity, including symlink/hard-link aliases. Confirmed output replacement happens only after a successful sibling-temp render; failure or cancellation preserves the existing output.
+
+`AudioWaveform.swift` generates bounded peaks for the selected audio track while idle. Playback, seeking and export pause that work. It caches two completed tracks until source close and adapts peak spacing for long files.
+
+## URL import
+
+`ManagedImportTools.swift` installs and updates official standalone yt-dlp and Deno outside the bundle, verifies their hashes/architecture/version, and keeps a previous installation for recovery. `URLImport.swift` manages format lookup, download, cancellation and retry. `ImportWorkspace.swift` leases disposable source directories and cleans abandoned workspaces without deleting a running instance's files.
+
+`ImportRange.swift` represents the requested original-video range and verified time mapping. Ranged downloads retain timestamps, omit subtitle/data tracks, then stream-copy into a normalized local source. Display and typed times use the measured offset; source playback, frame selection and exports keep local time. Unverifiable mapping offers an explicit full-download retry.
+
+The private FFmpeg build supports HTTPS through macOS SecureTransport. The dated patch in `patches/` turns peer certificate verification on by default, including nested requests and redirects. Remote range inputs use a protocol whitelist and a 30-second I/O timeout. Full tool/update behavior and input limits are in the [usage guide](guide.md).
+
+## Native UI
+
+The current design is B, Floating, selected from the native glass studies after C1, Frosted studio. One window-wide material sits behind floating inspector and timeline panels. The outer inset and panel gaps are 12 points. The preview selector aligns with the inspector's top; the video shares the timeline column's horizontal bounds, preserves aspect ratio and ends 12 points above it. There is no top rule above the timeline.
+
+Glass and shadows belong on control/panel shapes, separate from live media layers. Applying compositing, glass or a shadow directly to the video can break native layer ownership or clipping. Keep one persistent source display layer. The app follows system appearance, uses native glass only on macOS 26+, and supplies older-system and Reduce Transparency fallbacks.
+
+Keep source opening in the empty state and preview/export actions pinned below settings. Hide irrelevant audio controls and redundant one-track pickers. The export folder segment opens Save As directly. Timeline shortcuts use separate keycaps; the scrollbar is visible when needed. Preview modes explain their disabled state on hover.
+
+Historical visual sources remain on `prototype/ui-studies` at `eaa1ee3`, `prototype/c-refinements` at `f012eb9`, and `prototype/native-glass` at `083c486`. They are design references; production views are SwiftUI/AppKit.
+
+## Distribution
+
+FFmpeg excludes GPL, nonfree and version3 components and links private shared libraries. The app bundles its media helpers, dylibs and license texts. Matching releases include application/dependency sources, patches and build recipes. Runtime media work never uses Homebrew binaries. See [development.md](development.md) and [third-party notices](third-party-notices.txt).

@@ -2,7 +2,11 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 if [[ -n "$(git status --porcelain)" ]]; then echo 'Commit the working tree before packaging matching sources.' >&2; exit 1; fi
-export CLIPPER_REVIEW_BUILD="${CLIPPER_REVIEW_BUILD:-0}"
+VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' assets/Info.plist)"
+BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' assets/Info.plist)"
+APP_ZIP="Clipper-$VERSION-macOS-arm64.zip"
+SOURCE_ZIP="Clipper-$VERSION-Sources.zip"
+CHECKSUMS="Clipper-$VERSION-SHA256.txt"
 bash scripts/build-app.sh
 if [[ -d dist/Clipper-Sources ]]; then mv dist/Clipper-Sources ".build/previous-sources-$(uuidgen)"; fi
 mkdir -p dist/Clipper-Sources/Dependencies dist/Clipper-Sources/Recipes
@@ -13,17 +17,13 @@ cp scripts/build-*.sh scripts/build-zimg.py scripts/media-pkg-config.sh dist/Cli
 cp .build/vendor/{pkgconf-2.3.0,freetype-2.13.3,fribidi-1.0.16,harfbuzz-10.4.0,libass-0.17.3}.tar.xz dist/Clipper-Sources/Dependencies/
 cp scripts/subtitle-sources.sha256 dist/Clipper-Sources/Recipes/
 git rev-parse HEAD > dist/Clipper-Sources/COMMIT.txt
+{
+  echo "Clipper $VERSION ($BUILD)"
+  echo 'Apple Silicon; macOS 14 or newer; ad-hoc signed'
+} > dist/Clipper-Sources/BUILD.txt
 git archive HEAD -o dist/Clipper-Sources/Clipper-source.tar
 cp docs/third-party-notices.txt dist/Clipper-Sources/
-if [[ "$CLIPPER_REVIEW_BUILD" == 1 ]]; then
-  ditto -c -k --sequesterRsrc --keepParent "dist/Clipper Subtitles.app" dist/Clipper-Subtitles-macOS-arm64.zip
-else
-  ditto -c -k --sequesterRsrc --keepParent dist/Clipper.app dist/Clipper-macOS-arm64.zip
-fi
-if [[ "$CLIPPER_REVIEW_BUILD" == 1 ]]; then
-  ditto -c -k --keepParent dist/Clipper-Sources dist/Clipper-Subtitles-Sources.zip
-  echo 'Distribute Clipper-Subtitles-macOS-arm64.zip and Clipper-Subtitles-Sources.zip together.'
-else
-  ditto -c -k --keepParent dist/Clipper-Sources dist/Clipper-Sources.zip
-  echo 'Distribute Clipper-macOS-arm64.zip and Clipper-Sources.zip together.'
-fi
+ditto -c -k --sequesterRsrc --keepParent dist/Clipper.app "dist/$APP_ZIP"
+ditto -c -k --keepParent dist/Clipper-Sources "dist/$SOURCE_ZIP"
+(cd dist; shasum -a 256 "$APP_ZIP" "$SOURCE_ZIP" > "$CHECKSUMS")
+echo "Distribute $APP_ZIP and $SOURCE_ZIP together. Checksums: $CHECKSUMS"

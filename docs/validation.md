@@ -1,67 +1,57 @@
-# Validation record
+# Validation and known limits
 
-Validated on the user's Apple M1 Pro running macOS 27.0.1 with Xcode 27.2.
+## 0.5.0 integration
 
-## 0.4.1 adaptive window sizing
+Release validation uses the merged application on an Apple M1 Pro with macOS 27.0.1 and Xcode 27.2. All seven feature suites are integrated on main, alongside the existing media, window, timeline, importer and source-protection checks. This release cleanup changes documentation, version metadata and packaging only.
 
-The starter uses a 520×440 content area and centers within the current screen's usable bounds on launch and after closing a video. The editor starts at 1180 points wide and derives its height from the displayed video's aspect ratio plus the selector, timeline and spacing. `NSScreen.visibleFrame` supplies the current display's usable bounds, excluding the menu bar and Dock; the title bar is also subtracted. Portrait video narrows the window when it reaches the available height. Display changes refresh the bounds, and full screen suspends automatic frame changes.
+The final full confirmation run passed in 156.9 seconds: 175 test cases, with 170 passed, five opt-in network checks skipped and zero failures. It included the supplied 4K AV1 source. Plist validity, shell syntax, local documentation links, media capabilities and whitespace checks also passed.
 
-Two sizing tests cover landscape and portrait geometry, shorter available screens, native SwiftUI video bounds, the persistent native maximum height, manual resizing from either dimension, and close/reopen sizing. The focused file-paste and comparison-layer tests also pass. The native tests require window-service access outside the filesystem sandbox.
+The initial full run executed 175 tests, with five opt-in network checks skipped and one timing assertion failing. On the supplied 3840×2160, 60 fps AV1/Opus WebM, the minimum loop-head enqueue lead was 49.2 ms against a strict requirement above 50 ms. The same test confirmed continuous video timestamps, sample-contiguous audio, no layer flush at the seam and no transport pauses. It passed on an isolated rerun. The threshold was left unchanged; loop timing remains sensitive to machine load.
 
-## 0.3.1 confirmed output replacement
+The separate loopback TLS check passed. It confirms that the shipped FFmpeg rejects an untrusted self-signed peer without extra verification flags and without changing system trust.
 
-Save As now honors the native replacement confirmation for an existing output. Its validator only rejects the source video. Source protection checks resolved paths and device/inode identity, including symlinks and hard links, both before encoding and at publication. One-click Export still generates a unique name and does not authorize replacement.
+Commands and local evidence:
 
-The encoder writes to a unique temporary file beside the output. After successful encoding, a confirmed replacement uses FileManager's same-volume replacement operation. Cancellation and failed encoding never remove the existing output first. A destination created during an export to a new filename is not silently replaced.
+```sh
+bash scripts/make-fixtures.sh
+bash scripts/make-waveform-fixtures.sh
+bash scripts/make-subtitle-fixtures.sh
+CLIPPER_SAMPLE='/absolute/path/to/4k-av1.webm' bash scripts/test.sh
+CLIPPER_SAMPLE='/absolute/path/to/4k-av1.webm' bash scripts/test.sh --skip-build --filter LoopAuditionTests.testReal4KSelectionLoopsContinuouslyWhenProvided
+CLIPPER_RANGE_NETWORK_TEST=1 bash scripts/test.sh --skip-build --filter URLRangeTests.testNetworkBuildRejectsBadCertificatesByDefault
+```
 
-The original validator regression was observed failing for an existing, non-source output. Six focused tests then passed with the fix, covering validator acceptance, protection of source aliases, no-consent/missing-temp failure preservation, an actual hardware export replacing the output, immediate cancellation preserving that completed output, preview replacement cancellation, and encoded comparison stepping. Claude reviewed the confirmation gate, source identity checks and publication path and found no blockers.
+Logs for this pass are `.build/release-0.5.0-tests.log`, `.build/release-0.5.0-loop-recheck.log`, `.build/release-0.5.0-tests-recheck.log` and `.build/release-0.5.0-tls.log`. They are local build outputs rather than distributed source files. The supplied real-source check uses `FINAL LIFE： Episode 2 - BIG BUSINESS [shJPWM_mNcQ].webm` from the user's home directory and leaves it untouched.
 
-## 0.3.0 floating glass adoption
+## Covered behavior
 
-The user selected the native B prototype and authorized applying it to the main app. The production layout removes the study switcher and environment state, the timeline's top rule, and the video's extra horizontal padding. The selector and inspector share a top edge; the video preserves aspect ratio and sits 12 points above the timeline. One window material spans the app, with native glass panels on macOS 26+ and an older-system fallback.
+- Real decoding and frame selection across H.264 MP4, VFR MKV, VP9/AV1 WebM, legacy AVI, B-frames, nonzero start times and rotation. Export checks compare first/last frame identity, counts and timing after lossy hardware encoding.
+- Hardware H.264/HEVC, crop geometry, no upscaling, HDR color tags and SDR conversion; original source and symlink/hard-link protection; confirmed output replacement, cancellation and failure preservation.
+- Warm transport resume, cached frame/audio continuity, rapid steps/marks, encoded comparison alignment, divider ownership, continuous loop scheduling and cut audition.
+- Gesture-grouped undo/redo, native text undo, source-history resets and integrated preference/subtitle/waveform updates.
+- File copy/drag items on isolated pasteboards, completed-output lifetime, remembered export settings, bounded waveform peaks and selected-track changes.
+- SRT/WebVTT/ASS/SSA parsing, authored/override styling, imported snapshot lifetime, subtitle geometry, HDR policy, real cue timing and rendered hardware exports, including verified URL-range original-time mapping.
+- Import argument construction, tool recovery, workspace leases/cleanup, rough-range verification, original/local timestamp conversion and explicit full-download fallback.
+- Native window sizing, centering geometry and timeline scroll layout.
 
-The native comparison-surface geometry and encoded comparison-step tests both passed. Media processing code is unchanged from the previously passing 22-case run recorded below. The release build compiled and was ad-hoc signed. A native reopen with the supplied WebM confirmed the selector at the inspector top, video and timeline sharing left/right edges, no top rule and no prototype switcher. Claude reviewed the production promotion and agreed with the geometry, material placement, availability guards and removal of prototype dependencies. Small review findings reduced the video shadow near the timeline and restored a subtle thumbnail backing.
+## Checks still requiring hands-on use
 
-## Functional checks
+Try the native app with the files and destination apps used day to day. Automated model/layer checks do not measure physical display/audio latency, subjective AV1 smoothness, trackpad pinch, modal Save As interaction or whether another app accepts a pasted/dragged file. Subtitle style popovers, font fallback, complex authored ASS scripts and text-field undo should also receive a manual pass.
 
-The final 0.2.1 integration run passed all 22 XCTest cases with no skips or failures in 81 seconds, including three optional checks against the supplied 4K60 AV1 WebM. The export check cuts the requested region around 08:13.500–08:20.000 through Clipper's hardware H.264 pipeline at 3840×2160, verifies the frame count and output timestamps, and leaves the source untouched. Selection boundaries snap to decoded presentation times, so a typed sub-frame time is quantized to an actual source frame.
+The main run skips managed-tool installation, public-site imports and real yt-dlp loopback/range tests unless their opt-in variables are set. The TLS certificate check was run separately. Earlier branch handoffs contain their own network-test evidence, but it is not a fresh public-site check for this release.
 
-Synthetic fixtures exercise MP4, VFR MKV, VP9 and AV1 WebM, legacy AVI, B-frames, a nonzero container start timestamp, rotation, HEVC HDR and SDR conversion. Both hardware export codecs are tested. Frame identity is checked with uniquely shaded source frames and a tolerance for lossy compression. Cached stepping is checked against decoded VFR frame boundaries. Tests also cover rapid frame-step commands followed immediately by marking the start, and switching to encoded output during a pending source seek.
+macOS 14 is the deployment target, not a claim of runtime testing on an older Mac. Native glass has an availability-gated fallback. Current builds are ad-hoc signed; Developer ID signing and notarization remain follow-ups for easier sharing.
 
-The pause-during-seek regression failed before the fix with an unmet completion expectation and a permanently true `seeking` flag. It passed after restricting pause invalidation to active playback, as Claude recommended.
+## Product limits
 
-C1 tests exercise the real encoded-preview lifecycle, source/output frame alignment, rapid comparison steps followed by play or an I mark, cancelled preview replacement, repeated boundary nudges, rejected timestamp commits, and close-state cleanup. An AppKit layer test checks the rounded export crop coordinates, wipe placement and persistent ownership of the source display layer. A regression near the last H.264 GOP checks backward stepping with and without caches: a seek whose first decoded presentation time is too late now retries from earlier media rather than repeating the following frame.
+AV1 playback on M1 uses software decoding. Very demanding sources can drop playback frames; a distant exact seek still decodes from a keyframe. Cached nearby steps and warm resume reduce repeat work. Renderer timing tests do not establish perceived A/V sync over a long viewing session.
 
-The 0.2.1 transport regression failed before the fix because Play removed the displayed image and Pause started a fresh seek. It now verifies retained images and warm resume without seeking. Other new checks cover startup cancellation, cached video frame timing/count and sample-aligned audio continuity across H.264, VFR, VP9 and AV1, and exact cached intervals after a forward jump. That last regression caught a stale rendered interval in the faster continuation path; skipped, unconverted frames no longer stretch the previous cached frame's display duration. Divider tests verify that the knob, line and mask move together without adding layers or animations.
+Dolby Vision dynamic-metadata preservation and unusual AVI timestamp layouts need broader real-world coverage. HDR transfer/primaries and explicit SDR conversion have synthetic test coverage. HDR subtitle burn-in requires SDR conversion; bitmap subtitles and WebVTT CSS/positioning are unsupported. Subtitle source/style changes are outside undo history.
 
-## Performance
+URL ranges depend on server/index behavior and may transfer most of the original. Ranged imports omit embedded subtitles and use millisecond container timestamps. Live streams, DRM, playlists, browser-cookie authentication and audio-only imports are unsupported. See the [usage guide](guide.md) for details.
 
-The sample is 3840×2160 AV1 at 60 fps with Opus audio. On this M1 Pro, AV1 decoding uses software. `scripts/benchmark.sh` measures the actual C media bridge, including native display-buffer creation, at the requested location. The final run passed its thresholds for distant seek latency, real-time decoding and repeated forward/backward frame stepping. Cold seeks still require decoding from a keyframe; the decoded-frame cache is bounded to 512 MiB plus four display samples.
+## Release artifacts
 
-The C1 comparison check requests 30 source updates per second around the user's clip and requires at least 12 delivered updates per second without publishing an editing-seek busy state. Requests coalesce behind a running decode. Encoded playback supplies the clock; paused seeks and frame steps resolve exact source boundaries. This check measures the decode path, not screen presentation or perceived A/V sync.
+The packager requires a clean commit, stages and verifies an ad-hoc signed self-contained app, and creates versioned app/source ZIPs with SHA-256 checksums. The source receipt identifies the exact commit. Dependency sources, license texts, build recipes, subtitle checksums and the TLS patch accompany the release.
 
-Before the 0.2.1 changes, three seeks around the requested region measured 674, 611 and 701 ms. With two-second forward decoder reuse they measured 615, 85 and 91 ms. The first cold seek still decodes from a keyframe. Forward/backward frame steps measured 3.2/1.4 ms. A focused real-source transport run measured 16 ms from Play to the renderer clock starting after an exact seek, and under 1 ms for warm resume. These timings measure application/renderer state, not physical display or audio latency. The frame cache remains bounded to 512 MiB plus four rendered samples; the added 128-entry PCM audio ring uses about 1 MiB for typical AAC/Opus packets.
-
-## Claude review
-
-Two independent Claude reviews covered implementation risks and agreement with `docs/plan.md`. Findings drove fixes for interrupted file loading, cancelled seek state, queued keyboard commands, text-field shortcuts, playback flush ordering, export cleanup at quit, anamorphic/rotated crop geometry, color tags, thumbnail generation, reverse-frame caching and stale dependency packaging.
-
-A subsequent Claude re-check agreed with those fixes and identified the pause-during-seek race. The focused failing regression and final passing suite verify its recommended correction. No review findings were intentionally deferred as functional blockers.
-
-For C1, Claude reviewed the comparison architecture before implementation and completed two code reviews. Fixes preserve preview range metadata until a replacement succeeds, serialize repeated boundary nudges, defer playback commands during comparison steps, restore rejected timestamp text, prevent Save As replacement, expose selected accessibility states, and reject stale backdrops from previously opened sources.
-
-A focused Claude review agreed with the new exact-seek fallback and found no blockers in its selection logic, termination, cancellation, ownership or audio handling. Approximate timeline thumbnails and the direct playback-start seek still use the original demuxer seek path. The exact fallback applies to paused editing and comparison frame selection.
-
-For 0.2.1, Claude challenged eager playback priming and retaining a second buffer history. We adopted on-demand replay of the existing current-segment video cache plus a bounded PCM audio ring, and retained timing metadata for pause resolution. Claude's code review agreed with the cache and UI changes and found a startup-cancellation state bug. Pause/chase/EOF now clear or cancel startup state, with a focused quick Play/Pause/Play regression.
-
-## Packaging and visual checks
-
-The app uses self-built FFmpeg, dav1d and zimg libraries. Their deployment targets are macOS 14. The library graph is rewritten to bundle-relative paths; signing is ad-hoc. The build stages a fresh app before replacing the old one, so it never overwrites a running executable. The release script requires a clean Git tree and includes the matching application and dependency sources.
-
-macOS 14 compatibility is a deployment target and link check, not a runtime test on an older Mac. Developer ID signing and notarization remain deferred by user agreement.
-
-Native UI checks earlier in the session covered opening a WebM, the editor's loaded state, frame controls and playback. The final reopen check could not capture the window through the remote computer-use service, which reported `cgWindowNotFound` while listing Clipper as running. The latest playback/editor changes are covered by automated tests; final manual UI validation remains limited by that remote session.
-
-The native window service worked during the 0.2.1 follow-up. Checks on the supplied WebM confirmed clicks inside two formerly hollow framing icons change presets repeatedly, the one-track picker is hidden, Exclude audio and Resolution align correctly, and the split folder button opens Save As directly. Comparison dragging was checked in both directions, with one visible divider and matching accessibility values at 19% and 80%. Cmd+equals increased timeline zoom by 0.5. The later label/keycap cleanup is checked by building the native views. Physical trackpad pinch and subjective screen/audio latency still need hands-on verification.
-
-The user selected C from three HTML studies, then C1 from two refinements. C1 is implemented in the production SwiftUI/AppKit editor, including the frosted left sidebar, pinned export controls, comparison wipe and timeline overview. The original studies remain on `prototype/ui-studies`; the refinements remain on `prototype/c-refinements`. Their screenshots are design references, not captures of the native build.
+Source control retains earlier validation reports and completed per-feature handoffs at `e9d2c5d`. The current build and verification commands are in [development.md](development.md).

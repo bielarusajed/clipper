@@ -22,14 +22,6 @@ cp .build/media/bin/ffmpeg "$APP/Contents/Helpers/ffmpeg"
 cp .build/media/bin/ffprobe "$APP/Contents/Helpers/ffprobe"
 python3 scripts/package-libraries.py "$APP"
 cp assets/Info.plist "$APP/Contents/Info.plist"
-# Review identity is applied only to the staged bundle.
-if [[ "${CLIPPER_REVIEW_BUILD:-0}" == 1 ]]; then
-  /usr/libexec/PlistBuddy -c 'Set :CFBundleName Clipper Subtitles' "$APP/Contents/Info.plist"
-  /usr/libexec/PlistBuddy -c 'Set :CFBundleDisplayName Clipper Subtitles' "$APP/Contents/Info.plist"
-  /usr/libexec/PlistBuddy -c 'Set :CFBundleIdentifier app.clipper.review.hardsubs' "$APP/Contents/Info.plist"
-  /usr/libexec/PlistBuddy -c 'Delete :CFBundleDocumentTypes' "$APP/Contents/Info.plist"
-  /usr/libexec/PlistBuddy -c 'Delete :UTImportedTypeDeclarations' "$APP/Contents/Info.plist"
-fi
 cp .build/vendor/ffmpeg-8.0.1/COPYING.LGPLv2.1 "$APP/Contents/Resources/Licenses/FFmpeg-LGPL.txt"
 cp .build/media-configure.log "$APP/Contents/Resources/Licenses/FFmpeg-build.txt"
 cp docs/third-party-notices.txt "$APP/Contents/Resources/Licenses/Notices.txt"
@@ -45,12 +37,10 @@ codesign --force --sign - "$APP/Contents/Helpers/ffmpeg"
 codesign --force --sign - "$APP/Contents/Helpers/ffprobe"
 codesign --force --sign - "$APP"
 codesign --verify --deep --strict "$APP"
-NAME=Clipper
-if [[ "${CLIPPER_REVIEW_BUILD:-0}" == 1 ]]; then NAME="Clipper Subtitles"; fi
 mkdir -p "$ROOT/dist"
-if [[ -d "$ROOT/dist/$NAME.app" ]]; then
-  mv "$ROOT/dist/$NAME.app" "$ROOT/.build/previous-app-$(uuidgen).app"
+if [[ -d "$ROOT/dist/Clipper.app" ]]; then
+  mv "$ROOT/dist/Clipper.app" "$ROOT/.build/previous-app-$(uuidgen).app"
 fi
-mv "$APP" "$ROOT/dist/$NAME.app"
+mv "$APP" "$ROOT/dist/Clipper.app"
 rmdir "$STAGING"
-echo "$ROOT/dist/$NAME.app"
+echo "$ROOT/dist/Clipper.app"
