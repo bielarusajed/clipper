@@ -36,7 +36,7 @@ struct Viewer:View {
                     ZStack {
                         ComparisonSurface(source:playback.video,player:editor.outputPlayer,details:details,edit:editor.edit,mode:editor.previewMode,wipe:wipe,onWipe:{ wipe=$0 })
                         if editor.previewMode == .original, editor.edit.cropPreset != .original {
-                            CropOverlay(crop:$editor.edit.crop).disabled(editor.exporting || editor.loading)
+                            CropOverlay(editor:editor).disabled(editor.exporting || editor.loading)
                         }
                         if editor.previewMode == .compare {
                             HStack {
@@ -186,8 +186,17 @@ struct ComparisonSurface:NSViewRepresentable {
 }
 
 struct CropOverlay:View {
-    @Binding var crop:CGRect
+    @ObservedObject var editor:Editor
     @State private var original:CGRect?
+    @State private var transaction:UUID?
+    @GestureState private var dragging=false
+    private var crop:CGRect { editor.edit.crop }
+    private func begin() {
+        if original == nil { transaction=editor.beginEditGesture("Crop"); original=crop }
+    }
+    private func finish() {
+        editor.endEditGesture(transaction); transaction=nil; original=nil
+    }
     var body:some View {
         GeometryReader { geo in
             let r=CGRect(x:crop.minX*geo.size.width,y:crop.minY*geo.size.height,width:crop.width*geo.size.width,height:crop.height*geo.size.height)
@@ -195,20 +204,25 @@ struct CropOverlay:View {
                 Path { path in path.addRect(CGRect(origin:.zero,size:geo.size)); path.addRect(r) }.fill(.black.opacity(0.5),style:FillStyle(eoFill:true)).allowsHitTesting(false)
                 Rectangle().fill(.clear).contentShape(Rectangle()).overlay(Rectangle().stroke(.white,lineWidth:1))
                     .frame(width:r.width,height:r.height).position(x:r.midX,y:r.midY)
-                    .gesture(DragGesture(coordinateSpace:.named("crop")).onChanged { value in
-                        if original == nil { original=crop }
+                    .gesture(DragGesture(coordinateSpace:.named("crop")).updating($dragging) { _,state,_ in state=true }.onChanged { value in
+                        begin()
                         guard let o=original else { return }
-                        crop.origin=CGPoint(x:max(0,min(1-o.width,o.minX+value.translation.width/geo.size.width)),y:max(0,min(1-o.height,o.minY+value.translation.height/geo.size.height)))
-                    }.onEnded { _ in original=nil })
+                        guard let transaction else { return }
+                        editor.updateSettings("Crop",gesture:transaction) {
+                            $0.crop.origin=CGPoint(x:max(0,min(1-o.width,o.minX+value.translation.width/geo.size.width)),y:max(0,min(1-o.height,o.minY+value.translation.height/geo.size.height)))
+                        }
+                    }.onEnded { _ in finish() })
                 Image(systemName:"arrow.up.left.and.arrow.down.right").font(.system(size:12,weight:.bold)).foregroundStyle(.black).padding(5).background(.white,in:RoundedRectangle(cornerRadius:3))
                     .position(x:r.maxX-8,y:r.maxY-8)
-                    .gesture(DragGesture(coordinateSpace:.named("crop")).onChanged { value in
-                        if original == nil { original=crop }
+                    .gesture(DragGesture(coordinateSpace:.named("crop")).updating($dragging) { _,state,_ in state=true }.onChanged { value in
+                        begin()
                         guard let o=original else { return }
                         let factor=max(0.05,min((1-o.minX)/o.width,(1-o.minY)/o.height,1+value.translation.width/(o.width*geo.size.width)))
-                        crop.size=CGSize(width:o.width*factor,height:o.height*factor)
-                    }.onEnded { _ in original=nil })
+                        guard let transaction else { return }
+                        editor.updateSettings("Crop",gesture:transaction) { $0.crop.size=CGSize(width:o.width*factor,height:o.height*factor) }
+                    }.onEnded { _ in finish() })
             }.coordinateSpace(name:"crop")
-        }
+        }.onChange(of:dragging) { _,active in if !active { finish() } }
+            .onDisappear { finish() }
     }
 }

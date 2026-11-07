@@ -7,6 +7,11 @@ struct EditorView:View {
     @State private var dropping=false
     @State private var startText=""
     @State private var endText=""
+    @State private var ratioWidth="16"
+    @State private var ratioHeight="9"
+    @State private var qualityGesture:UUID?
+    private enum Field:Hashable { case start, end, width, height }
+    @FocusState private var focusedField:Field?
     @State private var availableWindowSize=CGSize(width:CGFloat.infinity,height:CGFloat.infinity)
 
     var body:some View {
@@ -40,7 +45,18 @@ struct EditorView:View {
             }
             return true
         }
-        .onChange(of:editor.edit) { old,_ in editor.settingsChanged(old) }
+        .onAppear {
+            startText=TimeText.format(editor.inTime); endText=TimeText.format(editor.end?.time ?? 0)
+            syncRatio()
+        }
+        .onChange(of:focusedField) { old,new in
+            editor.textEditing=new != nil
+            if old == .width || old == .height { commitRatio() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for:NSControl.textDidBeginEditingNotification)) { _ in editor.textEditing=true }
+        .onReceive(NotificationCenter.default.publisher(for:NSControl.textDidChangeNotification)) { _ in editor.textEditing=true }
+        .onReceive(NotificationCenter.default.publisher(for:NSControl.textDidEndEditingNotification)) { _ in editor.textEditing=false }
+        .onChange(of:editor.edit) { _,_ in if focusedField != .width && focusedField != .height { syncRatio() } }
         .onChange(of:editor.start) { _,_ in startText=TimeText.format(editor.inTime) }
         .onChange(of:editor.end) { _,value in endText=TimeText.format(value?.time ?? 0) }
         .onChange(of:editor.boundaryRevision) { _,_ in
@@ -51,6 +67,21 @@ struct EditorView:View {
         .alert("Clipper",isPresented:Binding(get:{editor.error != nil || playback.error != nil},set:{if !$0 {editor.error=nil;playback.error=nil}})) {
             Button("OK") { editor.error=nil; playback.error=nil }
         } message: { Text(editor.error ?? playback.error ?? "") }
+    }
+
+    private func setting<Value>(_ key:WritableKeyPath<EditSettings,Value>,_ name:String)->Binding<Value> {
+        Binding(get:{ editor.edit[keyPath:key] },set:{ value in editor.updateSettings(name) { $0[keyPath:key]=value } })
+    }
+    private func syncRatio() {
+        ratioWidth=editor.edit.customWidth.formatted(.number.grouping(.never))
+        ratioHeight=editor.edit.customHeight.formatted(.number.grouping(.never))
+    }
+    private func commitRatio() {
+        let style=FloatingPointFormatStyle<Double>.number
+        guard let width=try? Double(ratioWidth,format:style), let height=try? Double(ratioHeight,format:style),
+              width.isFinite, height.isFinite, width>0, height>0, (width/height).isFinite, width/height>0 else { syncRatio(); return }
+        editor.updateSettings("Crop Ratio") { $0.customWidth=width; $0.customHeight=height }
+        syncRatio()
     }
 
     private var windowVideoSize:CGSize? {
@@ -136,10 +167,12 @@ struct EditorView:View {
                 .background(Color.primary.opacity(0.035),in:RoundedRectangle(cornerRadius:5))
                 .overlay(RoundedRectangle(cornerRadius:5).stroke(C1.line,lineWidth:1))
                 .overlay(alignment:.leading) { C1.amber.frame(width:2).padding(.vertical,4) }
+                .focused($focusedField,equals:isStart ? .start : .end)
                 .onSubmit {
                     guard text.wrappedValue != TimeText.format(value) else { return }
                     if let t=TimeText.parse(text.wrappedValue) { isStart ? editor.markStart(t) : editor.markEnd(t) }
                     else { text.wrappedValue=TimeText.format(value); editor.error="Enter seconds or a time such as 00:01:23.450." }
+                    focusedField=nil
                 }
                 .help(isStart ? "First included source frame" : "Last included source frame")
             nudgeButton(isStart:isStart,direction:1)
@@ -159,7 +192,7 @@ struct EditorView:View {
                 HStack(spacing:1) {
                     ForEach(CropPreset.allCases) { preset in
                         let selected=editor.edit.cropPreset == preset
-                        Button { editor.edit.cropPreset=preset } label: {
+                        Button { editor.updateSettings("Crop") { $0.cropPreset=preset } } label: {
                             VStack(spacing:4) {
                                 AspectGlyph(ratio:preset.ratio ?? details.displaySize.width/details.displaySize.height,custom:preset == .custom)
                                 Text(preset.rawValue).font(.system(size:9))
@@ -176,16 +209,16 @@ struct EditorView:View {
                 if editor.edit.cropPreset == .custom {
                     HStack(spacing:6) {
                         Text("Ratio").frame(maxWidth:.infinity,alignment:.leading)
-                        TextField("Width",value:$editor.edit.customWidth,format:.number).frame(width:57)
+                        TextField("Width",text:$ratioWidth).focused($focusedField,equals:.width).onSubmit { commitRatio(); focusedField=nil }.frame(width:57)
                         Text(":").foregroundStyle(C1.muted)
-                        TextField("Height",value:$editor.edit.customHeight,format:.number).frame(width:57)
+                        TextField("Height",text:$ratioHeight).focused($focusedField,equals:.height).onSubmit { commitRatio(); focusedField=nil }.frame(width:57)
                     }.font(.system(size:11)).padding(.horizontal,10).padding(.bottom,9).textFieldStyle(.roundedBorder)
                 }
                 rowDivider
                 HStack {
                     Text("Resolution")
                     Spacer(minLength:4)
-                    Picker("Resolution",selection:$editor.edit.resolution) {
+                    Picker("Resolution",selection:setting(\.resolution,"Resolution")) {
                         ForEach(Resolution.allCases) { Text($0.rawValue).tag($0) }
                     }.labelsHidden().fixedSize().frame(maxWidth:154,alignment:.trailing)
                 }.font(.system(size:12)).controlSize(.small).padding(.horizontal,10).frame(height:36)
@@ -196,7 +229,7 @@ struct EditorView:View {
     private func videoSettings(_ details:MediaDetails)->some View {
         section("Video",detail:details.hdr && !editor.edit.convertToSDR ? "MP4 · HDR" : "MP4") {
             C1Group {
-                Picker("Codec",selection:$editor.edit.codec) { ForEach(VideoCodec.allCases) { Text($0.rawValue).tag($0) } }
+                Picker("Codec",selection:setting(\.codec,"Codec")) { ForEach(VideoCodec.allCases) { Text($0.rawValue).tag($0) } }
                     .labelsHidden().pickerStyle(.segmented).controlSize(.small).padding(8)
                     .disabled(details.hdr && !editor.edit.convertToSDR)
                 rowDivider
@@ -206,12 +239,17 @@ struct EditorView:View {
                         Spacer()
                         Text(editor.edit.quality < 55 ? "Smaller file" : editor.edit.quality > 75 ? "Higher quality" : "Balanced").font(.system(size:10)).foregroundStyle(C1.muted)
                     }
-                    Slider(value:$editor.edit.quality,in:20...95,step:1).controlSize(.mini).accessibilityLabel("Output quality")
+                    Slider(value:Binding(get:{editor.edit.quality},set:{ value in
+                        editor.updateSettings("Quality",gesture:qualityGesture) { $0.quality=value }
+                    }),in:20...95,step:1,onEditingChanged:{ editing in
+                        if editing { qualityGesture=editor.beginEditGesture("Quality") }
+                        else { editor.endEditGesture(qualityGesture); qualityGesture=nil }
+                    }).controlSize(.mini).accessibilityLabel("Output quality")
                     HStack { Text("Smaller file"); Spacer(); Text("Higher quality") }.font(.system(size:9)).foregroundStyle(C1.muted)
                 }.padding(10)
                 if details.hdr {
                     rowDivider
-                    Toggle("Convert to SDR",isOn:$editor.edit.convertToSDR).font(.system(size:11)).toggleStyle(.switch).controlSize(.mini).padding(10)
+                    Toggle("Convert to SDR",isOn:setting(\.convertToSDR,"Convert to SDR")).font(.system(size:11)).toggleStyle(.switch).controlSize(.mini).padding(10)
                 }
             }
         }
@@ -224,7 +262,7 @@ struct EditorView:View {
                     HStack {
                         Text("Track")
                         Spacer(minLength:4)
-                        Picker("Audio track",selection:$editor.edit.audioTrack) {
+                        Picker("Audio track",selection:setting(\.audioTrack,"Audio Track")) {
                             ForEach(details.audioLabels.indices,id:\.self) { Text(details.audioLabels[$0]).tag($0) }
                         }.labelsHidden().fixedSize().frame(maxWidth:170,alignment:.trailing)
                     }.font(.system(size:12)).controlSize(.small).padding(.horizontal,10).frame(height:35)
@@ -233,7 +271,7 @@ struct EditorView:View {
                 HStack {
                     Text("Exclude audio")
                     Spacer()
-                    Toggle("Exclude audio",isOn:$editor.edit.muted).labelsHidden().toggleStyle(.switch).controlSize(.mini)
+                    Toggle("Exclude audio",isOn:setting(\.muted,"Exclude Audio")).labelsHidden().toggleStyle(.switch).controlSize(.mini)
                 }.font(.system(size:12)).padding(.horizontal,10).frame(height:34)
             }
         }

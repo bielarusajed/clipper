@@ -13,6 +13,7 @@ import AppKit
         .defaultSize(width:EditorWindowLayout.starterSize.width,height:EditorWindowLayout.starterSize.height)
         .windowStyle(.titleBar)
         .commands {
+            EditHistoryCommands(editor:editor)
             CommandGroup(replacing:.newItem) {
                 Button("Open Video…") { editor.openPanel() }.keyboardShortcut("o").disabled(editor.exporting)
                 Button("Import URL…") { editor.showURLImporter() }.keyboardShortcut("o",modifiers:[.command,.shift]).disabled(editor.exporting)
@@ -89,5 +90,29 @@ import AppKit
             return .terminateLater
         }
         editor?.prepareToQuit(); return .terminateNow
+    }
+}
+
+/// Menu shortcuts route text editing through AppKit and complete edits through our manager.
+struct EditHistoryCommands:Commands {
+    @ObservedObject var editor:Editor
+    private var nativeText:Bool { editor.textEditing || editor.importPresented || NSApp.keyWindow?.firstResponder is NSText || NSApp.keyWindow is NSPanel }
+    private var manager:UndoManager? { nativeText ? NSApp.keyWindow?.firstResponder?.undoManager : editor.editUndoManager }
+    var body:some Commands {
+        CommandGroup(replacing:.undoRedo) {
+            Button(manager?.undoMenuItemTitle ?? "Undo") { perform(redo:false) }
+                .keyboardShortcut("z")
+                .disabled(nativeText ? manager?.canUndo != true : !editor.canUndo)
+            Button(manager?.redoMenuItemTitle ?? "Redo") { perform(redo:true) }
+                .keyboardShortcut("z",modifiers:[.command,.shift])
+                .disabled(nativeText ? manager?.canRedo != true : !editor.canRedo)
+        }
+    }
+    func perform(redo:Bool,in window:NSWindow?=NSApp.keyWindow) {
+        if window?.firstResponder is NSText || editor.importPresented || window is NSPanel {
+            let action=NSSelectorFromString(redo ? "redo:" : "undo:")
+            NSApp.sendAction(action,to:window,from:nil)
+        } else if redo { editor.redoEdit() }
+        else { editor.undoEdit() }
     }
 }

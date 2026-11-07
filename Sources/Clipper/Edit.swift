@@ -64,6 +64,27 @@ struct EditSettings: Equatable {
         if ratio < sourceRatio { let w = ratio/sourceRatio; crop = CGRect(x: (1-w)/2,y: 0,width: w,height: 1) }
         else { let h = sourceRatio/ratio; crop = CGRect(x: 0,y: (1-h)/2,width: 1,height: h) }
     }
+    /// Normalize once before recording, never while restoring an existing snapshot.
+    mutating func normalize(previous:EditSettings,details:MediaDetails?) {
+        if !customWidth.isFinite || customWidth <= 0 { customWidth=previous.customWidth }
+        if !customHeight.isFinite || customHeight <= 0 { customHeight=previous.customHeight }
+        if !(customWidth/customHeight).isFinite || customWidth/customHeight <= 0 {
+            customWidth=previous.customWidth; customHeight=previous.customHeight
+        }
+        quality=quality.isFinite ? max(20,min(95,quality)) : previous.quality
+        if let details {
+            if cropPreset != previous.cropPreset || (cropPreset == .custom && (customWidth != previous.customWidth || customHeight != previous.customHeight)) {
+                setCrop(ratio:cropPreset == .custom ? customWidth/customHeight : cropPreset.ratio,size:details.displaySize)
+            }
+            if details.hdr && !convertToSDR { codec = .hevc }
+            audioTrack=max(0,min(max(0,details.audioLabels.count-1),audioTrack))
+        }
+        if !crop.minX.isFinite || !crop.minY.isFinite || !crop.width.isFinite || !crop.height.isFinite || crop.width <= 0 || crop.height <= 0 {
+            crop=previous.crop
+        }
+        crop.size=CGSize(width:min(1,crop.width),height:min(1,crop.height))
+        crop.origin=CGPoint(x:max(0,min(1-crop.width,crop.minX)),y:max(0,min(1-crop.height,crop.minY)))
+    }
     func geometry(for details: MediaDetails) -> (x: Int,y: Int,width: Int,height: Int,outWidth: Int,outHeight: Int) {
         func even(_ value: Double) -> Int { max(2,Int(value/2)*2) }
         let size = details.displaySize
@@ -87,4 +108,10 @@ enum TimeText {
         for p in pieces { guard let n = Double(p), n.isFinite, n >= 0 else { return nil }; total = total*60+n }
         return total
     }
+}
+
+struct EditSnapshot:Equatable {
+    var start:FramePoint?
+    var end:FramePoint?
+    var settings:EditSettings
 }

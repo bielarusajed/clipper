@@ -9,9 +9,9 @@ import UniformTypeIdentifiers
     @Published var importPresented=false
     private var temporarySource:TemporaryImport?
     @Published var source: URL?
-    @Published var edit=EditSettings()
-    @Published var start: FramePoint?
-    @Published var end: FramePoint?
+    @Published private(set) var edit=EditSettings()
+    @Published private(set) var start: FramePoint?
+    @Published private(set) var end: FramePoint?
     @Published var exporting=false
     @Published var progress=0.0
     @Published var jobLabel=""
@@ -59,6 +59,115 @@ import UniformTypeIdentifiers
     var clipDuration: Double { max(0,outTime-inTime) }
     var canExport: Bool { source != nil && start != nil && end != nil && clipDuration > 0 && !loading && !playback.seeking && !previewStepRunning && !exporting && !importPresented }
 
+    // This manager never becomes the window/field editor manager. Text keeps native undo.
+    let editUndoManager:UndoManager = {
+        let manager=UndoManager(); manager.groupsByEvent=false; manager.levelsOfUndo=200
+        return manager
+    }()
+    @Published var textEditing=false
+    @Published private(set) var historyRevision=0
+    private var sourceGeneration=UUID()
+    private var boundaryEpoch=UUID()
+    private struct PendingEdit {
+        let id:UUID
+        let before:EditSnapshot
+        let name:String
+        var active=true
+        var latestRequest:UUID?
+    }
+    private var pendingEdit:PendingEdit?
+    var snapshot:EditSnapshot { EditSnapshot(start:start,end:end,settings:edit) }
+    private var historyAvailable:Bool {
+        source != nil && !loading && !exporting && !importPresented && !urlImporter.busy
+    }
+    var canUndo:Bool { historyAvailable && pendingEdit?.active != true && (editUndoManager.canUndo || pendingEdit.map { $0.before != snapshot } == true) }
+    var canRedo:Bool { historyAvailable && pendingEdit?.active != true && pendingEdit.map { $0.before == snapshot } != false && editUndoManager.canRedo }
+
+    @discardableResult func beginEditGesture(_ name:String)->UUID? {
+        guard historyAvailable else { return nil }
+        settlePendingEdit(); cancelNudges()
+        let id=UUID(); pendingEdit=PendingEdit(id:id,before:snapshot,name:name)
+        historyRevision += 1
+        return id
+    }
+    func endEditGesture(_ id:UUID?) {
+        guard let id, pendingEdit?.id == id else { return }
+        pendingEdit?.active=false
+        if pendingEdit?.latestRequest == nil { settlePendingEdit() }
+        historyRevision += 1
+    }
+    /// A superseding action commits only frames already resolved, then invalidates callbacks.
+    func settlePendingEdit() {
+        if let pending=pendingEdit {
+            pendingEdit=nil
+            recordEdit(before:pending.before,after:snapshot,name:pending.name)
+        }
+        boundaryEpoch=UUID()
+        historyRevision += 1
+    }
+    private func resetHistory() {
+        pendingEdit=nil; sourceGeneration=UUID(); boundaryEpoch=UUID()
+        editUndoManager.removeAllActions(); historyRevision += 1
+    }
+    private func recordEdit(before:EditSnapshot,after:EditSnapshot,name:String) {
+        guard before != after else { return }
+        let generation=sourceGeneration
+        if !editUndoManager.isUndoing && !editUndoManager.isRedoing { editUndoManager.beginUndoGrouping() }
+        editUndoManager.registerUndo(withTarget:self) { editor in
+            guard editor.sourceGeneration == generation else { return }
+            let inverse=editor.snapshot
+            editor.restoreEdit(before)
+            editor.recordEdit(before:inverse,after:before,name:name)
+        }
+        editUndoManager.setActionName(name)
+        if !editUndoManager.isUndoing && !editUndoManager.isRedoing { editUndoManager.endUndoGrouping() }
+        historyRevision += 1
+    }
+    func undoEdit() {
+        guard historyAvailable, pendingEdit?.active != true else { return }
+        settlePendingEdit(); cancelNudges(); playback.clearQueuedActions()
+        editUndoManager.undo(); historyRevision += 1
+    }
+    func redoEdit() {
+        guard historyAvailable, pendingEdit?.active != true else { return }
+        settlePendingEdit(); cancelNudges(); playback.clearQueuedActions()
+        editUndoManager.redo(); historyRevision += 1
+    }
+    private func restoreEdit(_ value:EditSnapshot) {
+        let old=snapshot
+        invalidatePreview(); playback.pause()
+        start=value.start; end=value.end; edit=value.settings
+        playback.endTime=outTime
+        let target=old.start != start ? inTime : old.end != end ? end?.time ?? inTime : playback.position
+        applyAudio(previous:old.settings,at:target)
+        if old.settings.audioTrack == edit.audioTrack { playback.seek(target) }
+        refreshBoundary(start:true)
+    }
+    func updateSettings(_ name:String,gesture:UUID?=nil,_ mutate:(inout EditSettings)->Void) {
+        guard historyAvailable else { return }
+        if let gesture {
+            guard pendingEdit?.id == gesture, pendingEdit?.active == true else { return }
+        } else { settlePendingEdit() }
+        let before=snapshot
+        var next=edit; mutate(&next)
+        next.normalize(previous:edit,details:details)
+        guard next != edit else { return }
+        cancelNudges(); boundaryEpoch=UUID(); invalidatePreview()
+        edit=next
+        applyAudio(previous:before.settings,at:playback.position)
+        if gesture == nil { recordEdit(before:before,after:snapshot,name:name) }
+    }
+    private func applyAudio(previous:EditSettings,at time:Double) {
+        if edit.audioTrack != previous.audioTrack, let source {
+            let duration=details?.duration, generation=sourceGeneration
+            playback.open(source,audioTrack:edit.audioTrack,at:time,completion:{ [weak self] in
+                guard let self, self.sourceGeneration == generation else { return }
+                if let duration { self.playback.details?.duration=duration }
+            })
+        }
+        playback.setMuted(edit.muted)
+    }
+
     init() {
         outputPlayer.actionAtItemEnd = .pause
         outputPlayer.automaticallyWaitsToMinimizeStalling=false
@@ -78,6 +187,7 @@ import UniformTypeIdentifiers
     }
     func showURLImporter(url:URL?=nil) {
         guard !exporting, !importPresented else { return }
+        settlePendingEdit(); cancelNudges()
         urlImporter.begin(url:url)
         playback.pause(); outputPlayer.pause(); importPresented=true
     }
@@ -94,7 +204,7 @@ import UniformTypeIdentifiers
         let previous=temporarySource
         temporarySource=temporary
         defer { if let previous { playback.queue.async { withExtendedLifetime(previous) {} } } }
-        cancelNudges(); timelineZoom=0
+        resetHistory(); cancelNudges(); timelineZoom=0
         let id=UUID(); loadingID=id; loading=true
         invalidatePreview(); source=url; start=nil; end=nil; edit=EditSettings(); error=nil; lastExport=nil; nextOutputURL=uniqueOutput(for:url)
         playback.setMuted(false)
@@ -118,7 +228,7 @@ import UniformTypeIdentifiers
     }
     func close() {
         guard !exporting, !urlImporter.busy else { return }
-        cancelNudges()
+        resetHistory(); cancelNudges()
         loadingID=UUID(); loading=false
         invalidatePreview(); playback.close()
         let previous=temporarySource; temporarySource=nil
@@ -132,7 +242,7 @@ import UniformTypeIdentifiers
     }
     func nudgeBoundary(start:Bool,direction:Int) {
         guard !loading, !exporting else { return }
-        returnToOriginal()
+        settlePendingEdit(); returnToOriginal()
         nudges.append(BoundaryNudge(start:start,direction:direction)); processNudge()
     }
     private func cancelNudges() { nudgeEpoch=UUID(); nudges=[]; nudgeRunning=false }
@@ -159,7 +269,8 @@ import UniformTypeIdentifiers
             })
         })
     }
-    private func commitBoundary(_ frame:FramePoint,start:Bool) {
+    private func commitBoundary(_ frame:FramePoint,start:Bool,gesture:UUID?=nil) {
+        let before=snapshot
         if start {
             if frame.time<outTime { self.start=frame }
             else { error="The start must be before the end of the clip." }
@@ -167,51 +278,50 @@ import UniformTypeIdentifiers
             if frame.end>inTime { self.end=frame; playback.endTime=outTime }
             else { error="The end must be after the start of the clip." }
         }
+        if gesture == nil { recordEdit(before:before,after:snapshot,name:start ? "Trim Start" : "Trim End") }
         refreshBoundary(start:start)
     }
     private func refreshBoundary(start:Bool) { lastBoundaryIsStart=start; boundaryRevision += 1 }
-    func seek(_ time: Double) { guard !loading else { return }; cancelNudges(); returnToOriginal(); playback.clearQueuedActions(); playback.seek(time) }
-    func markStart(_ time: Double? = nil) {
-        guard !exporting, !loading else { return }
+    func seek(_ time: Double) { guard !loading else { return }; settlePendingEdit(); cancelNudges(); returnToOriginal(); playback.clearQueuedActions(); playback.seek(time) }
+    func markStart(_ time:Double?=nil,gesture:UUID?=nil) { markBoundary(time,start:true,gesture:gesture) }
+    func markEnd(_ time:Double?=nil,gesture:UUID?=nil) { markBoundary(time,start:false,gesture:gesture) }
+    private func markBoundary(_ time:Double?,start:Bool,gesture:UUID?) {
+        guard historyAvailable else { return }
+        if let gesture {
+            guard pendingEdit?.id == gesture, pendingEdit?.active == true else { return }
+        } else { settlePendingEdit() }
         cancelNudges()
-        if time == nil, previewStepRunning { afterPreviewSteps.append { [weak self] in self?.markStart() }; return }
-        if time == nil, previewMode != .original { let t=previewStart+currentOutputTime; invalidatePreview(); markStart(t); return }
-        if time == nil && playback.seeking { playback.afterPendingSeeks { [weak self] in self?.markStart() }; return }
-        invalidatePreview()
-        playback.seek((time ?? playback.position)+(time == nil ? 0 : 0.0005),onFailure:{ [weak self] in self?.refreshBoundary(start:true) },completion:{ [weak self] in
-            guard let self, let frame=self.playback.frame else { return }
-            self.commitBoundary(frame,start:true)
-        })
+        resolveBoundary(time,start:start,gesture:gesture,epoch:boundaryEpoch)
     }
-    func markEnd(_ time: Double? = nil) {
-        guard !exporting, !loading else { return }
-        cancelNudges()
-        if time == nil, previewStepRunning { afterPreviewSteps.append { [weak self] in self?.markEnd() }; return }
-        if time == nil, previewMode != .original { let t=previewStart+currentOutputTime; invalidatePreview(); markEnd(t); return }
-        if time == nil && playback.seeking { playback.afterPendingSeeks { [weak self] in self?.markEnd() }; return }
+    private func resolveBoundary(_ time:Double?,start:Bool,gesture:UUID?,epoch:UUID) {
+        guard boundaryEpoch == epoch, historyAvailable else { return }
+        if time == nil, previewStepRunning {
+            afterPreviewSteps.append { [weak self] in self?.resolveBoundary(time,start:start,gesture:gesture,epoch:epoch) }; return
+        }
+        if time == nil, previewMode != .original {
+            let t=previewStart+currentOutputTime
+            invalidatePreview(); resolveBoundary(t,start:start,gesture:gesture,epoch:epoch); return
+        }
+        if time == nil && playback.seeking {
+            playback.afterPendingSeeks { [weak self] in self?.resolveBoundary(time,start:start,gesture:gesture,epoch:epoch) }; return
+        }
+        let request=UUID()
+        if gesture != nil { pendingEdit?.latestRequest=request }
         invalidatePreview()
-        playback.seek((time ?? playback.position)+(time == nil ? 0 : 0.0005),onFailure:{ [weak self] in self?.refreshBoundary(start:false) },completion:{ [weak self] in
-            guard let self, let frame=self.playback.frame else { return }
-            self.commitBoundary(frame,start:false)
+        let finish={ [weak self] in
+            guard let self, self.boundaryEpoch == epoch else { return }
+            if self.pendingEdit?.id == gesture, self.pendingEdit?.latestRequest == request {
+                self.pendingEdit?.latestRequest=nil
+                if self.pendingEdit?.active == false { self.settlePendingEdit() }
+            }
+        }
+        playback.seek((time ?? playback.position)+(time == nil ? 0 : 0.0005),onFailure:{ [weak self] in
+            guard let self, self.boundaryEpoch == epoch else { return }
+            self.refreshBoundary(start:start); finish()
+        },completion:{ [weak self] in
+            guard let self, self.boundaryEpoch == epoch, let frame=self.playback.frame else { return }
+            self.commitBoundary(frame,start:start,gesture:gesture); finish()
         })
-    }
-    func settingsChanged(_ previous: EditSettings) {
-        guard !loading else { return }
-        cancelNudges()
-        invalidatePreview()
-        if edit.cropPreset != previous.cropPreset, let details {
-            let ratio=edit.cropPreset == .custom ? edit.customWidth/edit.customHeight : edit.cropPreset.ratio
-            edit.setCrop(ratio:ratio,size:details.displaySize)
-        } else if (edit.customWidth != previous.customWidth || edit.customHeight != previous.customHeight), edit.cropPreset == .custom, let details {
-            edit.setCrop(ratio:edit.customWidth/edit.customHeight,size:details.displaySize)
-        }
-        if details?.hdr == true && !edit.convertToSDR { edit.codec = .hevc }
-        if edit.audioTrack != previous.audioTrack, let source {
-            let t=playback.position
-            let duration=details?.duration
-            playback.open(source,audioTrack:edit.audioTrack,at:t,completion:{ [weak self] in if let duration { self?.playback.details?.duration=duration } })
-        }
-        playback.setMuted(edit.muted)
     }
     func invalidatePreview() {
         revision=UUID(); stopPreviewTracking(); previewStatus=nil
@@ -224,6 +334,7 @@ import UniformTypeIdentifiers
     func returnToOriginal() { if previewMode != .original { switchPreviewMode(.original) } }
     func togglePlayback() {
         guard !loading else { return }
+        settlePendingEdit()
         cancelNudges()
         if previewMode != .original {
             guard previewReady else { return }
@@ -245,7 +356,7 @@ import UniformTypeIdentifiers
     func switchPreviewMode(_ mode:PreviewMode) {
         guard mode == .original || (previewReady && previewURL != nil && !loading && !exporting) else { return }
         guard mode != previewMode else { return }
-        cancelNudges()
+        settlePendingEdit(); cancelNudges()
         let time=previewMode == .original ? max(0,min(playback.position-previewStart,max(0,previewDuration-0.000002))) : currentOutputTime
         stopPreviewTracking(); outputPlayer.pause(); playback.pause()
         previewMode=mode; playback.setMuted(mode == .compare ? true : edit.muted)
@@ -306,6 +417,7 @@ import UniformTypeIdentifiers
     }
     func stepFrame(_ direction:Int) {
         guard !loading, !exporting else { return }
+        settlePendingEdit()
         cancelNudges()
         if previewMode == .original { playback.step(direction); return }
         guard previewReady, previewSteps.count<64 else { return }
@@ -359,6 +471,7 @@ import UniformTypeIdentifiers
         }
     }
     func preview() {
+        settlePendingEdit()
         guard canExport else { return }
         let beginning=min(max(playback.position,inTime),max(inTime,outTime-0.000001))
         // At the selected end, start up to five seconds earlier for a useful sample.
@@ -368,6 +481,7 @@ import UniformTypeIdentifiers
         encode(destination:url,start:from,end:from+duration,isPreview:true)
     }
     func export(saveAs: Bool = false) {
+        settlePendingEdit()
         guard canExport, let source else { return }
         var destination=uniqueOutput(for:source)
         var replacingExisting=false
@@ -383,6 +497,7 @@ import UniformTypeIdentifiers
         export(to:destination,replacingExisting:replacingExisting)
     }
     func export(to destination:URL,replacingExisting:Bool) {
+        settlePendingEdit()
         guard canExport, let source else { return }
         do { try ExportDestination.validate(source:source,destination:destination) }
         catch { self.error=error.localizedDescription; return }
@@ -401,6 +516,7 @@ import UniformTypeIdentifiers
         }
     }
     private func encode(destination: URL,start: Double,end: Double,isPreview: Bool,replacingExisting:Bool=false) {
+        settlePendingEdit(); cancelNudges()
         guard let source, let details else { return }
         stopPreviewTracking(); previewMode = .original; playback.setMuted(edit.muted)
         playback.pause(); outputPlayer.pause()
