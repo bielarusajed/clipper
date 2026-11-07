@@ -234,6 +234,25 @@ final class PasteImportTests:XCTestCase {
         assertEqual(await service.excludedAudio,[true])
     }
 
+    @MainActor func testRangeIntentSurvivesPendingLookupAndDefaultsToFull() async throws {
+        let service=ImportServiceSpy()
+        await service.releaseDownload()
+        let model=URLImport(service:service)
+        model.begin(url:URL(string:"https://example.com/one?t=90")!)
+        model.rangeEnabled=true; model.rangeStart="08:00"; model.rangeEnd="08:30"
+        var opened=false
+        model.download { _ in opened=true }
+        model.rangeStart="1"; model.rangeEnd="2"; model.rangeEnabled=false
+        await service.releaseLookup()
+        try await waitUntil { opened }
+        assertEqual(await service.ranges,[try ImportRange(start:480,end:510)])
+        model.begin(url:URL(string:"https://example.com/two?t=90")!)
+        opened=false
+        model.download { _ in opened=true }
+        try await waitUntil { opened }
+        assertEqual(await service.ranges,[try ImportRange(start:480,end:510),nil])
+    }
+
     @MainActor private func waitUntil(_ condition:() async -> Bool) async throws {
         let deadline=Date().addingTimeInterval(3)
         while !(await condition()) {
@@ -253,6 +272,7 @@ private actor ImportServiceSpy:URLImportServicing {
     private(set) var selectors=[String]()
     private(set) var excludedAudio=[Bool]()
     private(set) var downloadURLs=[URL]()
+    private(set) var ranges=[ImportRange?]()
     func releaseLookup() { lookupReleased=true }
     func releaseDownload() { downloadReleased=true }
     func prepare(status:@escaping @Sendable(String)->Void) async throws -> ImportTools {
@@ -269,9 +289,9 @@ private actor ImportServiceSpy:URLImportServicing {
             ["format_id":"140","vcodec":"none","acodec":"aac"]]]
         return try URLMedia.decode(JSONSerialization.data(withJSONObject:json))
     }
-    func download(url:URL,media:URLMedia,selector:String,excludeAudio:Bool,tools:ImportTools,
+    func download(url:URL,media:URLMedia,selector:String,excludeAudio:Bool,range:ImportRange?,tools:ImportTools,
                   progress:@escaping @Sendable(ImportProgress)->Void) async throws -> TemporaryImport {
-        downloadCount += 1; selectors.append(selector); excludedAudio.append(excludeAudio); downloadURLs.append(url)
+        downloadCount += 1; ranges.append(range); selectors.append(selector); excludedAudio.append(excludeAudio); downloadURLs.append(url)
         do { while !downloadReleased { try await Task.sleep(for:.milliseconds(10)) }; try Task.checkCancellation() }
         catch { cancelledDownloads += 1; throw error }
         let directory=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString,isDirectory:true)
