@@ -3,7 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 if [[ -n "$(git status --porcelain)" ]]; then echo 'Commit the working tree before packaging matching sources.' >&2; exit 1; fi
-bash scripts/build-app.sh
+CLIPPER_REVIEW_BUILD=0 bash scripts/build-app.sh
 APP='dist/Clipper Undo Redo Review.app'
 SOURCES='dist/Clipper-Undo-Redo-Sources'
 if [[ -d "$APP" ]]; then mv "$APP" ".build/previous-undo-review-$(uuidgen).app"; fi
@@ -28,6 +28,9 @@ if [[ -d "$SOURCES" ]]; then mv "$SOURCES" ".build/previous-undo-sources-$(uuidg
 mkdir -p "$SOURCES/Dependencies" "$SOURCES/Recipes"
 cp .build/vendor/ffmpeg-8.0.1.tar.xz .build/vendor/dav1d-1.5.4.tar.gz .build/vendor/zimg-3.0.6.tar.gz "$SOURCES/Dependencies/"
 cp .build/media/config.mak .build/media-configure.log "$SOURCES/Recipes/"
+cp .build/media/tls-patch.sha256 patches/ffmpeg-8.0.1-tls-verify-default.patch "$SOURCES/Dependencies/"
+cp .build/vendor/{pkgconf-2.3.0,freetype-2.13.3,fribidi-1.0.16,harfbuzz-10.4.0,libass-0.17.3}.tar.xz "$SOURCES/Dependencies/"
+cp scripts/subtitle-sources.sha256 "$SOURCES/Recipes/"
 cp scripts/build-*.sh scripts/build-zimg.py scripts/media-pkg-config.sh scripts/package-undo-redo-review.sh "$SOURCES/Recipes/"
 git archive HEAD -o "$SOURCES/Clipper-source.tar"
 cp docs/third-party-notices.txt "$SOURCES/"

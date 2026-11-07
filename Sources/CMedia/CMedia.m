@@ -16,6 +16,7 @@ enum { RenderCacheCount=4, RawCacheCount=48, AudioCacheCount=128 };
 ClipRequest *clip_request_create(void) { ClipRequest *r=calloc(1,sizeof(*r)); atomic_init(&r->generation,0); return r; }
 void clip_request_free(ClipRequest *r) { free(r); }
 void clip_request_set(ClipRequest *r,int generation) { atomic_store(&r->generation,generation); }
+int clip_request_current(ClipRequest *r,int generation) { return !r || atomic_load(&r->generation)==generation; }
 
 struct ClipMedia {
     AVFormatContext *format;
@@ -100,6 +101,7 @@ ClipMedia *clip_open(const char *path, int audioTrack, char *error, int errorSiz
     m->info.fps = rate.num ? av_q2d(rate) : 30;
     AVRational sar = av_guess_sample_aspect_ratio(m->format, v, NULL);
     m->info.pixelAspect = sar.num ? av_q2d(sar) : 1;
+    m->info.colorSpace = p->color_space;
     m->info.hdr = p->color_trc == AVCOL_TRC_SMPTE2084 || p->color_trc == AVCOL_TRC_ARIB_STD_B67;
     const AVPacketSideData *side = av_packet_side_data_get(p->coded_side_data, p->nb_coded_side_data, AV_PKT_DATA_DISPLAYMATRIX);
     if (side && side->size >= 9 * sizeof(int32_t)) { m->info.rotation = -av_display_rotation_get((const int32_t *)side->data); }

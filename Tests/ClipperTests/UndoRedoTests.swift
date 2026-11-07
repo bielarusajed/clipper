@@ -3,6 +3,17 @@ import XCTest
 @testable import Clipper
 
 final class UndoRedoTests:XCTestCase {
+    private var preferenceSuites=[String]()
+    override func tearDown() {
+        for suite in preferenceSuites { UserDefaults.standard.removePersistentDomain(forName:suite) }
+        preferenceSuites=[]
+        super.tearDown()
+    }
+    @MainActor private func makeEditor()->Editor {
+        let suite="app.clipper.tests.undo.\(UUID().uuidString)"
+        preferenceSuites.append(suite)
+        return Editor(preferences:ExportPreferences(defaults:UserDefaults(suiteName:suite)!))
+    }
     private func fixture(_ name:String="cfr.mp4")->URL {
         URL(fileURLWithPath:#filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent(".build/fixtures/"+name)
     }
@@ -12,7 +23,7 @@ final class UndoRedoTests:XCTestCase {
         XCTAssertFalse(editor.loading); XCTAssertFalse(editor.playback.seeking); XCTAssertFalse(editor.exporting)
     }
     @MainActor private func opened(_ name:String="cfr.mp4") async throws -> Editor {
-        let editor=Editor(); editor.open(fixture(name)); try await ready(editor)
+        let editor=makeEditor(); editor.open(fixture(name)); try await ready(editor)
         XCTAssertNotNil(editor.start); XCTAssertNotNil(editor.end)
         XCTAssertFalse(editor.canUndo); XCTAssertFalse(editor.editUndoManager.canUndo)
         return editor
@@ -187,7 +198,7 @@ final class UndoRedoTests:XCTestCase {
         process.executableURL=fixture().deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("media/bin/ffmpeg")
         process.arguments=["-v","error","-i",fixture().path,"-map","0:v","-map","0:a","-map","0:a","-c","copy",output.path]
         try process.run(); process.waitUntilExit(); XCTAssertEqual(process.terminationStatus,0)
-        let editor=Editor(); editor.open(output); try await ready(editor)
+        let editor=makeEditor(); editor.open(output); try await ready(editor)
         defer { editor.close() }
         XCTAssertEqual(editor.details?.audioLabels.count,2)
         let before=editor.snapshot
@@ -207,7 +218,7 @@ final class UndoRedoTests:XCTestCase {
         process.executableURL=fixture().deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("media/bin/ffmpeg")
         process.arguments=["-v","error","-i",fixture().path,"-map","0:v","-map","0:a","-map","0:a","-c","copy",output.path]
         try process.run(); process.waitUntilExit(); XCTAssertEqual(process.terminationStatus,0)
-        let editor=Editor(); editor.open(output); try await ready(editor)
+        let editor=makeEditor(); editor.open(output); try await ready(editor)
         defer { editor.close() }
         editor.seek(1.0005); try await ready(editor)
         let expected=try XCTUnwrap(editor.playback.frame)

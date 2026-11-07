@@ -39,3 +39,18 @@ This pass does not claim a manual end-to-end accessibility or appearance audit a
 Two lower-risk points remain for manual GUI verification: the ordering of SwiftUI's final quality-slider callback after a click/drag, and transport-key interruption during a held crop/quality gesture. Transport commands currently settle the active gesture; remaining updates from that gesture are ignored until a new drag. Starting a gesture while decoding is rejected, and rejected quality gestures cannot fall back to one entry per tick. Native text undo should also be tried in timestamp, ratio and URL fields in the review app. An unsubmitted timestamp draft resets on focus loss. Claude accepted these documented behavior limits and found no remaining blocker. No new media dependency, full hardware regression sweep, push, merge or PR is part of this candidate.
 
 Likely integration overlap with the other feature branches is in Editor.swift, EditorView.swift, Viewer.swift, Timeline.swift and ClipperApp.swift. Settings controls must keep using atomic `updateSettings`; restoring history must not trigger crop re-normalization. The shared `.build/media` and `.build/vendor` inputs were reused read-only; Swift build/module caches, fixtures and all artifacts remain private to this worktree.
+
+## PR conflict resolution
+
+PR #6 now incorporates `origin/main` at `ef73cab`, including waveform, export handoff, export preferences, URL-range imports and subtitles. The conflict resolution preserves private atomic edit commits and exact crop restoration. Both edit commits and undo/redo refresh the waveform and rebuild subtitle geometry. Codec and quality controls retain remembered choices, including undo/redo, while forced HDR normalization never overwrites the SDR codec preference. Initial settings still load without undo entries. Displayed timestamps retain verified original-video offsets and submit local frame times.
+
+Existing feature tests now use the atomic edit API. Undo tests use isolated preferences rather than the user's defaults. Three new integration checks cover remembered codec/quality through undo/redo, HDR conversion undo preserving the SDR preference, and subtitle geometry through crop undo/redo.
+
+The merge regression run passed 135 tests with zero failures; four optional network checks were skipped. It covers all integrated feature suites, native text and window/timeline behavior, source protection, confirmed replacement and HDR conversion. Evidence is in `.build/undo-merge-tests.log`. The media capability check also passed.
+
+```sh
+bash scripts/test.sh --filter 'UndoRedoTests|SubtitleTests|WaveformTests|ExportPreferencesTests|ExportHandoffTests|URLRangeTests|URLImportTests|ImportWorkspaceTests|ManagedImportToolsTests|PasteImportTests|TimelineTests|EditorWindowTests|MediaTests.testExportProtectsSourceThroughSymlinksAndHardLinks|MediaTests.testPublishingDoesNotReplaceWithoutConsentOrWhenNewFileIsMissing|MediaTests.testConfirmedExportReplacesOnlyAfterSuccessAndCancellationKeepsOutput|MediaTests.testHDRPreserveAndSDRConversion'
+bash scripts/check-media.sh
+```
+
+Media/vendor inputs were copied privately from the already-built subtitle/TLS stack without modifying another worktree. The updated review source package includes the subtitle dependency source archives, build/checksum recipes, certificate-verification patch and hash receipt alongside the existing sources. Rebuild the matching review ZIPs with the packaging command above. The source receipt identifies the exact merged commit.

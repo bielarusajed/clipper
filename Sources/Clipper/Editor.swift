@@ -6,18 +6,34 @@ import UniformTypeIdentifiers
 
 @MainActor final class Editor: ObservableObject {
     let playback=Playback()
+    let subtitles=SubtitleController()
+    private var subtitleChanges:AnyCancellable?
+    let waveform=AudioWaveform()
+    @Published var waveformVisible=false
+    private var waveformObservers=Set<AnyCancellable>()
     let urlImporter=URLImport()
     @Published var importPresented=false
     private var temporarySource:TemporaryImport?
+    @Published private(set) var importTimeline:ImportTimeline?
+    @Published private(set) var importTimeNote:String?
+    var timeDisplayOffset:Double { importTimeline?.offset ?? 0 }
+    func displayTime(_ local:Double)->Double { local+timeDisplayOffset }
+    func localTime(_ displayed:Double)->Double? {
+        let local=displayed-timeDisplayOffset
+        guard local.isFinite, local >= -0.001, let duration=details?.duration, duration > 0 else { return nil }
+        return max(0,min(local,duration-0.000001))
+    }
     @Published var source: URL?
     @Published private(set) var edit=EditSettings()
+    private let preferences:ExportPreferences
     @Published private(set) var start: FramePoint?
     @Published private(set) var end: FramePoint?
     @Published var exporting=false
     @Published var progress=0.0
     @Published var jobLabel=""
     @Published var error: String?
-    @Published var lastExport: URL?
+    let exportedClip=ExportedClip()
+    var lastExport:URL? { exportedClip.url }
     @Published var previewURL: URL?
     @Published private(set) var previewMode=PreviewMode.original
     @Published private(set) var previewReady=false
@@ -58,7 +74,7 @@ import UniformTypeIdentifiers
     var inTime: Double { start?.time ?? 0 }
     var outTime: Double { min(end?.end ?? details?.duration ?? 0,details?.duration ?? 0) }
     var clipDuration: Double { max(0,outTime-inTime) }
-    var canExport: Bool { source != nil && start != nil && end != nil && clipDuration > 0 && !loading && !playback.seeking && !previewStepRunning && !exporting && !importPresented }
+    var canExport: Bool { source != nil && start != nil && end != nil && clipDuration > 0 && !loading && !playback.seeking && !previewStepRunning && !exporting && !importPresented && subtitles.ready && !(subtitles.enabled && details?.hdr == true && !edit.convertToSDR) }
 
     // This manager never becomes the window/field editor manager. Text keeps native undo.
     let editUndoManager:UndoManager = {
@@ -142,6 +158,10 @@ import UniformTypeIdentifiers
         let target=old.start != start ? inTime : old.end != end ? end?.time ?? inTime : playback.position
         applyAudio(previous:old.settings,at:target)
         if old.settings.audioTrack == edit.audioTrack { playback.seek(target) }
+        if old.settings.quality != edit.quality { preferences.setQuality(edit.quality) }
+        if old.settings.codec != edit.codec, details?.hdr != true || edit.convertToSDR { preferences.setCodec(edit.codec) }
+        if let details { subtitles.rebuild(details:details,edit:edit) }
+        refreshWaveform()
         refreshBoundary(start:true)
     }
     func updateSettings(_ name:String,gesture:UUID?=nil,_ mutate:(inout EditSettings)->Void) {
@@ -158,10 +178,13 @@ import UniformTypeIdentifiers
         cancelNudges(); invalidatePreview()
         edit=next
         applyAudio(previous:before.settings,at:playback.position)
+        if let details { subtitles.rebuild(details:details,edit:edit) }
+        refreshWaveform()
         if gesture == nil { recordEdit(before:before,after:snapshot,name:name) }
     }
     private func applyAudio(previous:EditSettings,at time:Double) {
         if edit.audioTrack != previous.audioTrack, let source {
+            waveform.cancel()
             let duration=details?.duration, generation=sourceGeneration
             playback.open(source,audioTrack:edit.audioTrack,at:time,completion:{ [weak self] in
                 guard let self, self.sourceGeneration == generation else { return }
@@ -171,12 +194,33 @@ import UniformTypeIdentifiers
         playback.setMuted(edit.muted)
     }
 
-    init() {
+    init(preferences:ExportPreferences = ExportPreferences()) {
+        self.preferences=preferences
+        edit=preferences.makeSettings()
+        subtitleChanges=subtitles.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         outputPlayer.actionAtItemEnd = .pause
         outputPlayer.automaticallyWaitsToMinimizeStalling=false
-        // Menu availability also depends on the decoder and importer state.
         playback.$seeking.removeDuplicates().sink { [weak self] _ in self?.objectWillChange.send() }.store(in:&historyObservers)
         urlImporter.$busy.removeDuplicates().sink { [weak self] _ in self?.objectWillChange.send() }.store(in:&historyObservers)
+        let changes:[AnyPublisher<Void,Never>]=[
+            $waveformVisible.map { _ in () }.eraseToAnyPublisher(),
+            $loading.map { _ in () }.eraseToAnyPublisher(),
+            $exporting.map { _ in () }.eraseToAnyPublisher(),
+            $previewPlaying.map { _ in () }.eraseToAnyPublisher(),
+            $comparisonPreparing.map { _ in () }.eraseToAnyPublisher(),
+            playback.$playing.map { _ in () }.eraseToAnyPublisher(),
+            playback.$starting.map { _ in () }.eraseToAnyPublisher(),
+            playback.$seeking.map { _ in () }.eraseToAnyPublisher(),
+            playback.$details.map { _ in () }.eraseToAnyPublisher()
+        ]
+        Publishers.MergeMany(changes).receive(on:DispatchQueue.main).sink { [weak self] in self?.refreshWaveform() }.store(in:&waveformObservers)
+    }
+    private func refreshWaveform() {
+        let stream=details.flatMap { $0.audioStreams.indices.contains(edit.audioTrack) ? $0.audioStreams[edit.audioTrack] : nil } ?? -1
+        waveform.update(url:source,stream:stream,origin:details?.origin ?? 0,duration:details?.duration ?? 0,
+                        enabled:waveformVisible && !loading && source != nil,
+                        busy:loading || exporting || playback.playing || playback.starting || playback.seeking || previewPlaying || comparisonPreparing,
+                        lease:temporarySource)
     }
     deinit {
         if let previewObserver { outputPlayer.removeTimeObserver(previewObserver) }
@@ -208,14 +252,24 @@ import UniformTypeIdentifiers
         guard !urlImporter.busy else { error="Finish or cancel the URL import before opening another video."; return }
         guard !exporting else { error="Finish or cancel the current export before opening another video."; return }
         let previous=temporarySource
+        waveform.resetSource()
         temporarySource=temporary
+        importTimeline=temporary?.timeline
+        importTimeNote=temporary?.range == nil ? nil : "Original video times · imported section"
         defer { if let previous { playback.queue.async { withExtendedLifetime(previous) {} } } }
+        subtitles.reset()
         resetHistory(); cancelNudges(); timelineZoom=0
         let id=UUID(); loadingID=id; loading=true
-        invalidatePreview(); source=url; start=nil; end=nil; edit=EditSettings(); error=nil; lastExport=nil; nextOutputURL=uniqueOutput(for:url)
+        invalidatePreview(); source=url; start=nil; end=nil; edit=preferences.makeSettings(); error=nil; exportedClip.set(nil); nextOutputURL=uniqueOutput(for:url)
         playback.setMuted(false)
         playback.open(url,onFailure:{ [weak self] in self?.loading=false }) { [weak self] in
             guard let self, self.loadingID==id, let info=self.details else { return }
+            if let timeline=self.importTimeline, abs(timeline.localOrigin-info.origin) >= 0.002 {
+                self.importTimeline=nil
+                self.importTimeNote="Original timestamps unavailable. Showing local section times."
+            }
+            self.subtitles.open(url,details:info,timelineOffset:self.importTimeline?.offset ?? 0)
+            self.subtitles.rebuild(details:info,edit:self.edit)
             if info.hdr { self.edit.codec = .hevc }
             self.start=self.playback.frame
             self.playback.seek(max(0,info.duration-0.000001),onFailure:{
@@ -234,16 +288,19 @@ import UniformTypeIdentifiers
     }
     func close() {
         guard !exporting, !urlImporter.busy else { return }
+        subtitles.reset(); waveform.resetSource()
         resetHistory(); cancelNudges()
         loadingID=UUID(); loading=false
         invalidatePreview(); playback.close()
         let previous=temporarySource; temporarySource=nil
         if let previous { playback.queue.async { withExtendedLifetime(previous) {} } }
-        source=nil; start=nil; end=nil; edit=EditSettings(); lastExport=nil; nextOutputURL=nil; error=nil
+        importTimeline=nil; importTimeNote=nil
+        source=nil; start=nil; end=nil; edit=preferences.makeSettings(); exportedClip.set(nil); nextOutputURL=nil; error=nil
     }
     func prepareToQuit() {
         let download=temporarySource
         close()
+        waveform.cancelAndWait()
         download?.dispose()
     }
     func nudgeBoundary(start:Bool,direction:Int) {
@@ -328,6 +385,34 @@ import UniformTypeIdentifiers
             guard let self, self.boundaryEpoch == epoch, let frame=self.playback.frame else { return }
             self.commitBoundary(frame,start:start,gesture:gesture); finish()
         })
+    }
+    func setCodec(_ codec:VideoCodec) {
+        guard !loading, !exporting, !importPresented, !urlImporter.busy,
+              !(details?.hdr == true && !edit.convertToSDR) else { return }
+        preferences.setCodec(codec)
+        if source == nil { edit.codec=codec }
+        else { updateSettings("Codec") { $0.codec=codec } }
+    }
+    func setQuality(_ quality:Double,gesture:UUID?=nil) {
+        guard !loading, !exporting, !importPresented, !urlImporter.busy,
+              quality.isFinite, (20...95).contains(quality) else { return }
+        if let gesture { guard pendingEdit?.id == gesture, pendingEdit?.active == true else { return } }
+        preferences.setQuality(quality)
+        if source == nil { edit.quality=preferences.quality }
+        else { updateSettings("Quality",gesture:gesture) { $0.quality=preferences.quality } }
+    }
+    func setConvertToSDR(_ enabled:Bool) {
+        guard !loading, details?.hdr == true else { return }
+        updateSettings("Convert to SDR") {
+            $0.convertToSDR=enabled
+            $0.codec=enabled ? preferences.codec : .hevc
+        }
+    }
+    func importSubtitles(_ url:URL) {
+        guard !exporting else { return }
+        // A repeated URL can contain new text, so URL equality cannot invalidate this sample.
+        invalidatePreview()
+        subtitles.importExternal(url)
     }
     func invalidatePreview() {
         revision=UUID(); stopPreviewTracking(); previewStatus=nil
@@ -492,12 +577,14 @@ import UniformTypeIdentifiers
         var destination=uniqueOutput(for:source)
         var replacingExisting=false
         if saveAs || temporarySource != nil {
+            destination=uniqueOutput(for:source,in:preferences.resolvedSaveDirectory())
             let panel=NSSavePanel(); panel.allowedContentTypes=[.mpeg4Movie]; panel.nameFieldStringValue=destination.lastPathComponent
             panel.directoryURL=destination.deletingLastPathComponent()
             panel.canCreateDirectories=true
-            let validator=ExportSavePanelValidator(source:source)
+            let validator=ExportSavePanelValidator(source:source,managedDirectories:managedExportDirectories)
             panel.delegate=validator
             guard withExtendedLifetime(validator,{ panel.runModal() }) == .OK, let url=panel.url else { return }; destination=url
+            preferences.recordSaveDirectory(from:destination)
             replacingExisting=FileManager.default.fileExists(atPath:destination.path)
         }
         export(to:destination,replacingExisting:replacingExisting)
@@ -505,14 +592,17 @@ import UniformTypeIdentifiers
     func export(to destination:URL,replacingExisting:Bool) {
         settlePendingEdit()
         guard canExport, let source else { return }
-        do { try ExportDestination.validate(source:source,destination:destination) }
+        do { try ExportDestination.validate(source:source,destination:destination,managedDirectories:managedExportDirectories) }
         catch { self.error=error.localizedDescription; return }
         encode(destination:destination,start:inTime,end:outTime,isPreview:false,replacingExisting:replacingExisting)
     }
     func uniqueOutput(for source: URL) -> URL {
-        let parent=temporarySource?.file == source
-            ? FileManager.default.urls(for:.downloadsDirectory,in:.userDomainMask)[0]
+        let parent=temporarySource?.file == source || ExportDestination.isInManagedDirectory(source)
+            ? preferences.resolvedSaveDirectory()
             : source.deletingLastPathComponent()
+        return uniqueOutput(for:source,in:parent)
+    }
+    func uniqueOutput(for source:URL,in parent:URL) -> URL {
         let base=source.deletingPathExtension().lastPathComponent
         var n=1
         while true {
@@ -529,7 +619,7 @@ import UniformTypeIdentifiers
         let token=revision
         let temporary=destination.deletingLastPathComponent().appendingPathComponent(".clipper-\(UUID().uuidString).mp4")
         let job=EncoderProcess(); encoder=job
-        let request=ExportRequest(source:source,details:details,edit:edit,start:start,end:end,destination:temporary)
+        let request=ExportRequest(source:source,details:details,edit:edit,start:start,end:end,destination:temporary,subtitles:subtitles.enabled ? subtitles.render : nil)
         exporting=true; progress=0; error=nil; jobLabel=isPreview ? "Rendering preview" : "Exporting clip"
         Task {
             defer {
@@ -539,24 +629,28 @@ import UniformTypeIdentifiers
             do {
                 try await job.run(request) { value in Task { @MainActor in self.progress=value } }
                 if isPreview && token != revision { return }
-                try ExportDestination.publish(temporary,to:destination,source:source,replacingExisting:replacingExisting)
+                try ExportDestination.publish(temporary,to:destination,source:source,replacingExisting:replacingExisting,managedDirectories:managedExportDirectories)
                 if isPreview {
                     if let old=previewURL { try? FileManager.default.removeItem(at:old) }
                     previewStart=start; previewDuration=end-start; previewURL=destination; installPreview(destination)
-                } else { lastExport=destination; nextOutputURL=uniqueOutput(for:source) }
+                } else { exportedClip.set(destination); nextOutputURL=uniqueOutput(for:source) }
             } catch ExportFailure.cancelled { }
             catch { self.error=error.localizedDescription }
         }
     }
     func cancel() { encoder?.cancel() }
-    func cancelAndQuit() { quitAfterExport=true; encoder?.cancel() }
-    func revealExport() { if let lastExport { NSWorkspace.shared.activateFileViewerSelecting([lastExport]) } }
+    func cancelAndQuit() {
+        if exporting { quitAfterExport=true; encoder?.cancel() }
+        else { prepareToQuit(); NSApp.reply(toApplicationShouldTerminate:true) }
+    }
+    private var managedExportDirectories:[URL] { [TemporaryImport.root]+(temporarySource.map { [$0.directory] } ?? []) }
 }
 
 @MainActor final class ExportSavePanelValidator:NSObject,NSOpenSavePanelDelegate {
     let source:URL
-    init(source:URL) { self.source=source }
+    let managedDirectories:[URL]
+    init(source:URL,managedDirectories:[URL]=[TemporaryImport.root]) { self.source=source; self.managedDirectories=managedDirectories }
     func panel(_ sender:Any,validate url:URL) throws {
-        try ExportDestination.validate(source:source,destination:url)
+        try ExportDestination.validate(source:source,destination:url,managedDirectories:managedDirectories)
     }
 }

@@ -114,6 +114,7 @@ struct URLImportPresenter:NSViewRepresentable {
         var download:(()->Void)?
         func handleReturn(_ event:NSEvent)->Bool {
             guard [36,76].contains(event.keyCode) else { return false }
+            guard (firstResponder as? NSTextInputClient)?.hasMarkedText() != true else { return false }
             let modifiers=event.modifierFlags.intersection([.command,.control,.option,.shift])
             if modifiers == .command {
                 chooseFormats?(); return true

@@ -94,7 +94,7 @@ final class Playback: ObservableObject {
             let info=clip_info(m)
             var codec=info.codec
             let codecText=withUnsafePointer(to:&codec) { $0.withMemoryRebound(to:CChar.self,capacity:64) { String(cString:$0) } }
-            let details=MediaDetails(duration:info.duration,origin:info.origin,width:Int(info.width),height:Int(info.height),rotation:info.rotation,pixelAspect:info.pixelAspect,fps:info.fps,hdr:info.hdr != 0,codec:codecText,audioLabels:(0..<info.audioCount).map { String(cString:clip_audio_label(m,$0)) },audioStreams:(0..<info.audioCount).map { Int(clip_audio_stream(m,$0)) })
+            let details=MediaDetails(duration:info.duration,origin:info.origin,width:Int(info.width),height:Int(info.height),rotation:info.rotation,pixelAspect:info.pixelAspect,fps:info.fps,hdr:info.hdr != 0,codec:codecText,audioLabels:(0..<info.audioCount).map { String(cString:clip_audio_label(m,$0)) },audioStreams:(0..<info.audioCount).map { Int(clip_audio_stream(m,$0)) },colorSpace:Int(info.colorSpace))
             DispatchQueue.main.async {
                 guard self.isCurrent(token) else { return }
                 self.details=details

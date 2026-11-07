@@ -47,25 +47,29 @@ struct EditorView:View {
             return true
         }
         .onAppear {
-            startText=TimeText.format(editor.inTime); endText=TimeText.format(editor.end?.time ?? 0)
+            startText=TimeText.format(editor.displayTime(editor.inTime)); endText=TimeText.format(editor.displayTime(editor.end?.time ?? 0))
             syncRatio()
         }
         .onChange(of:focusedField) { old,new in
             // Invalidate command presentation; routing always reads the actual responder.
             editor.objectWillChange.send()
             if old == .width || old == .height { commitRatio() }
-            if old == .start { startText=TimeText.format(editor.inTime) }
-            if old == .end { endText=TimeText.format(editor.end?.time ?? 0) }
+            if old == .start { startText=TimeText.format(editor.displayTime(editor.inTime)) }
+            if old == .end { endText=TimeText.format(editor.displayTime(editor.end?.time ?? 0)) }
         }
         .onReceive(NotificationCenter.default.publisher(for:NSControl.textDidBeginEditingNotification)) { _ in editor.objectWillChange.send() }
         .onReceive(NotificationCenter.default.publisher(for:NSControl.textDidEndEditingNotification)) { _ in editor.objectWillChange.send() }
         .onReceive(NotificationCenter.default.publisher(for:NSWindow.didBecomeKeyNotification)) { _ in editor.objectWillChange.send() }
         .onChange(of:editor.edit) { _,_ in if focusedField != .width && focusedField != .height { syncRatio() } }
-        .onChange(of:editor.start) { _,_ in startText=TimeText.format(editor.inTime) }
-        .onChange(of:editor.end) { _,value in endText=TimeText.format(value?.time ?? 0) }
+        .onChange(of:editor.start) { _,_ in startText=TimeText.format(editor.displayTime(editor.inTime)) }
+        .onChange(of:editor.end) { _,value in endText=TimeText.format(editor.displayTime(value?.time ?? 0)) }
+        .onChange(of:editor.timeDisplayOffset) { _,_ in
+            startText=TimeText.format(editor.displayTime(editor.inTime))
+            endText=TimeText.format(editor.displayTime(editor.end?.time ?? 0))
+        }
         .onChange(of:editor.boundaryRevision) { _,_ in
-            if editor.lastBoundaryIsStart { startText=TimeText.format(editor.inTime) }
-            else { endText=TimeText.format(editor.end?.time ?? 0) }
+            if editor.lastBoundaryIsStart { startText=TimeText.format(editor.displayTime(editor.inTime)) }
+            else { endText=TimeText.format(editor.displayTime(editor.end?.time ?? 0)) }
         }
         .background(URLImportPresenter(editor:editor).frame(width:0,height:0))
         .alert("Clipper",isPresented:Binding(get:{editor.error != nil || playback.error != nil},set:{if !$0 {editor.error=nil;playback.error=nil}})) {
@@ -109,13 +113,14 @@ struct EditorView:View {
                                 boundaryRow("End",isStart:false,text:$endText,value:editor.end?.time ?? 0)
                                 rowDivider
                                 HStack {
-                                    Text("Snap to source frames")
+                                    Text(editor.importTimeNote ?? "Snap to source frames").help(editor.importTimeNote ?? "Snap to source frames").lineLimit(1)
                                 }.font(.system(size:10)).foregroundStyle(C1.muted).padding(.horizontal,10).frame(height:27)
                             }
                         }
                         framing(details)
                         videoSettings(details)
                         if !details.audioLabels.isEmpty { audioSettings(details) }
+                        SubtitleSettingsView(editor:editor,subtitles:editor.subtitles,details:details)
                     } else {
                         VStack(spacing:12) {
                             if editor.loading { ProgressView().controlSize(.small); Text("Opening video…") }
@@ -174,9 +179,11 @@ struct EditorView:View {
                 .overlay(alignment:.leading) { C1.amber.frame(width:2).padding(.vertical,4) }
                 .focused($focusedField,equals:isStart ? .start : .end)
                 .onSubmit {
-                    guard text.wrappedValue != TimeText.format(value) else { return }
-                    if let t=TimeText.parse(text.wrappedValue) { isStart ? editor.markStart(t) : editor.markEnd(t) }
-                    else { text.wrappedValue=TimeText.format(value); editor.error="Enter seconds or a time such as 00:01:23.450." }
+                    guard text.wrappedValue != TimeText.format(editor.displayTime(value)) else { return }
+                    if let displayed=TimeText.parse(text.wrappedValue), let t=editor.localTime(displayed) {
+                        isStart ? editor.markStart(t) : editor.markEnd(t)
+                    }
+                    else { text.wrappedValue=TimeText.format(editor.displayTime(value)); editor.error="Enter a time inside the imported video, as seconds or hh:mm:ss.sss." }
                     focusedField=nil
                 }
                 .help(isStart ? "First included source frame" : "Last included source frame")
@@ -234,7 +241,7 @@ struct EditorView:View {
     private func videoSettings(_ details:MediaDetails)->some View {
         section("Video",detail:details.hdr && !editor.edit.convertToSDR ? "MP4 · HDR" : "MP4") {
             C1Group {
-                Picker("Codec",selection:setting(\.codec,"Codec")) { ForEach(VideoCodec.allCases) { Text($0.rawValue).tag($0) } }
+                Picker("Codec",selection:Binding(get:{editor.edit.codec},set:{editor.setCodec($0)})) { ForEach(VideoCodec.allCases) { Text($0.rawValue).tag($0) } }
                     .labelsHidden().pickerStyle(.segmented).controlSize(.small).padding(8)
                     .disabled(details.hdr && !editor.edit.convertToSDR)
                 rowDivider
@@ -246,7 +253,7 @@ struct EditorView:View {
                     }
                     Slider(value:Binding(get:{editor.edit.quality},set:{ value in
                         guard !qualityDragging || qualityGesture != nil else { return }
-                        editor.updateSettings("Quality",gesture:qualityGesture) { $0.quality=value }
+                        editor.setQuality(value,gesture:qualityGesture)
                     }),in:20...95,step:1,onEditingChanged:{ editing in
                         qualityDragging=editing
                         if editing { qualityGesture=editor.beginEditGesture("Quality") }
@@ -256,7 +263,7 @@ struct EditorView:View {
                 }.padding(10)
                 if details.hdr {
                     rowDivider
-                    Toggle("Convert to SDR",isOn:setting(\.convertToSDR,"Convert to SDR")).font(.system(size:11)).toggleStyle(.switch).controlSize(.mini).padding(10)
+                    Toggle("Convert to SDR",isOn:Binding(get:{editor.edit.convertToSDR},set:{editor.setConvertToSDR($0)})).font(.system(size:11)).toggleStyle(.switch).controlSize(.mini).padding(10)
                 }
             }
         }
@@ -319,10 +326,7 @@ struct EditorView:View {
                         .overlay(RoundedRectangle(cornerRadius:8).stroke(C1.blue.opacity(0.4),lineWidth:1).allowsHitTesting(false))
                         .opacity(editor.canExport ? 1 : 0.45).disabled(!editor.canExport)
                 }
-                if editor.lastExport != nil {
-                    Button { editor.revealExport() } label: { Label("Saved · Show in Finder",systemImage:"checkmark.circle.fill") }
-                        .buttonStyle(.plain).font(.system(size:9)).foregroundStyle(C1.secondary).frame(maxWidth:.infinity)
-                }
+                ExportHandoffView(clip:editor.exportedClip)
             }
         }.padding(.horizontal,14).padding(.top,12).padding(.bottom,14)
             .background(C1.line.frame(height:1),alignment:.top)
@@ -337,7 +341,7 @@ struct EditorView:View {
                     Image(systemName:editor.isPlaying ? "pause.fill" : "play.fill").frame(width:27,height:24).background(C1.blue.opacity(0.07),in:RoundedRectangle(cornerRadius:5))
                 }.help("Play / pause (Space)")
                 Button { editor.stepFrame(1) } label: { Image(systemName:"chevron.right") }.help("Next frame (→)")
-                Text(TimeText.format(editor.displayedPosition)).font(.system(size:12,weight:.semibold).monospacedDigit()).foregroundStyle(C1.ink).padding(.leading,3)
+                Text(TimeText.format(editor.displayTime(editor.displayedPosition))).font(.system(size:12,weight:.semibold).monospacedDigit()).foregroundStyle(C1.ink).padding(.leading,3)
                 if playback.seeking { ProgressView().controlSize(.mini) }
                 Spacer()
             }.buttonStyle(.borderless).font(.system(size:11)).foregroundStyle(C1.secondary).frame(height:EditorWindowLayout.transportHeight)
