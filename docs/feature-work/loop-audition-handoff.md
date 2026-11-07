@@ -16,7 +16,7 @@ Pause, scrub, frame-step, change a marker, change preview modes, start a render/
 
 Playback owns a run identifier that survives internal wrap seeks and becomes invalid on public transport interruptions. A separate requested-playing state keeps the pause control active during preparation. The decoder excludes frames at the out boundary and clips the final PCM audio buffer, matching the export's hard cut. A render-clock boundary observer triggers wrap or final-frame hold. Encoded loops use the existing AVPlayer end notification and Compare synchronization. No new media dependencies or configure options.
 
-Claude consulted on the plan and reviewed the code. The review found delayed B-frames after interleaved audio, single-frame loop clock reuse, startup failure flags, unnecessary settings interruptions, and disabled-menu consistency. These findings were fixed, with regression checks for final B-frame delivery per pass and one-frame looping. The implementation adopts Playback-owned cancellation, exclusive audio/video cutoff, short-range priming and explicit cache limitations. A requested follow-up recheck failed with "Claude API rate limit reached. Try again later." No reset time was supplied. Claude completed the plan consultation and initial review, but has not rechecked the fixes.
+Claude consulted on the plan and reviewed the code. The review found delayed B-frames after interleaved audio, single-frame loop clock reuse, startup failure flags, unnecessary settings interruptions, and disabled-menu consistency. These findings were fixed, with regression checks for final B-frame delivery per pass and one-frame looping. The implementation adopts Playback-owned cancellation, exclusive audio/video cutoff, short-range priming and explicit cache limitations. Claude subsequently resumed the follow-up review and approved all five fixes with no remaining substantive findings. The recheck was read-only; test results come from the local hardware checks below.
 
 ## Validation
 
@@ -35,7 +35,7 @@ Sandboxed test attempts failed during native renderer/IOSurface startup, includi
 
 Loop restarts reuse the existing bounded decoded cache. A long or high-resolution selection can outgrow it and require a keyframe seek. The last image remains visible during that brief pause. This first version does not promise gapless audio or a seamless wrap. VFR audition can start slightly more than one second before the cut because it begins at the containing frame's start. The clock callback may run late under main-thread load; queued audio/video samples still stop at the exclusive cut.
 
-Likely integration overlap is in `Editor.swift`, `Playback.swift`, the timeline transport controls and the Playback menu, particularly with undo/redo and waveform work. No branches were merged and nothing was pushed.
+Likely integration overlap is in `Editor.swift`, `Playback.swift`, the timeline transport controls and the Playback menu, particularly with undo/redo and waveform work. No branches were merged and nothing was pushed. Main gained `docs/feature-work/SCHEDULE.md` and `kickoff-manifest.json` after this branch was created. This feature does not delete those files; retain them during integration.
 
 ## Rebuild and distribute
 
