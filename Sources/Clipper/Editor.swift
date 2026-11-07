@@ -16,7 +16,8 @@ import UniformTypeIdentifiers
     @Published var progress=0.0
     @Published var jobLabel=""
     @Published var error: String?
-    @Published var lastExport: URL?
+    let exportedClip=ExportedClip()
+    var lastExport:URL? { exportedClip.url }
     @Published var previewURL: URL?
     @Published private(set) var previewMode=PreviewMode.original
     @Published private(set) var previewReady=false
@@ -96,7 +97,7 @@ import UniformTypeIdentifiers
         defer { if let previous { playback.queue.async { withExtendedLifetime(previous) {} } } }
         cancelNudges(); timelineZoom=0
         let id=UUID(); loadingID=id; loading=true
-        invalidatePreview(); source=url; start=nil; end=nil; edit=EditSettings(); error=nil; lastExport=nil; nextOutputURL=uniqueOutput(for:url)
+        invalidatePreview(); source=url; start=nil; end=nil; edit=EditSettings(); error=nil; exportedClip.set(nil); nextOutputURL=uniqueOutput(for:url)
         playback.setMuted(false)
         playback.open(url,onFailure:{ [weak self] in self?.loading=false }) { [weak self] in
             guard let self, self.loadingID==id, let info=self.details else { return }
@@ -123,7 +124,7 @@ import UniformTypeIdentifiers
         invalidatePreview(); playback.close()
         let previous=temporarySource; temporarySource=nil
         if let previous { playback.queue.async { withExtendedLifetime(previous) {} } }
-        source=nil; start=nil; end=nil; edit=EditSettings(); lastExport=nil; nextOutputURL=nil; error=nil
+        source=nil; start=nil; end=nil; edit=EditSettings(); exportedClip.set(nil); nextOutputURL=nil; error=nil
     }
     func prepareToQuit() {
         let download=temporarySource
@@ -375,7 +376,7 @@ import UniformTypeIdentifiers
             let panel=NSSavePanel(); panel.allowedContentTypes=[.mpeg4Movie]; panel.nameFieldStringValue=destination.lastPathComponent
             panel.directoryURL=destination.deletingLastPathComponent()
             panel.canCreateDirectories=true
-            let validator=ExportSavePanelValidator(source:source)
+            let validator=ExportSavePanelValidator(source:source,managedDirectories:managedExportDirectories)
             panel.delegate=validator
             guard withExtendedLifetime(validator,{ panel.runModal() }) == .OK, let url=panel.url else { return }; destination=url
             replacingExisting=FileManager.default.fileExists(atPath:destination.path)
@@ -384,12 +385,12 @@ import UniformTypeIdentifiers
     }
     func export(to destination:URL,replacingExisting:Bool) {
         guard canExport, let source else { return }
-        do { try ExportDestination.validate(source:source,destination:destination) }
+        do { try ExportDestination.validate(source:source,destination:destination,managedDirectories:managedExportDirectories) }
         catch { self.error=error.localizedDescription; return }
         encode(destination:destination,start:inTime,end:outTime,isPreview:false,replacingExisting:replacingExisting)
     }
     func uniqueOutput(for source: URL) -> URL {
-        let parent=temporarySource?.file == source
+        let parent=temporarySource?.file == source || ExportDestination.isInManagedDirectory(source)
             ? FileManager.default.urls(for:.downloadsDirectory,in:.userDomainMask)[0]
             : source.deletingLastPathComponent()
         let base=source.deletingPathExtension().lastPathComponent
@@ -417,24 +418,25 @@ import UniformTypeIdentifiers
             do {
                 try await job.run(request) { value in Task { @MainActor in self.progress=value } }
                 if isPreview && token != revision { return }
-                try ExportDestination.publish(temporary,to:destination,source:source,replacingExisting:replacingExisting)
+                try ExportDestination.publish(temporary,to:destination,source:source,replacingExisting:replacingExisting,managedDirectories:managedExportDirectories)
                 if isPreview {
                     if let old=previewURL { try? FileManager.default.removeItem(at:old) }
                     previewStart=start; previewDuration=end-start; previewURL=destination; installPreview(destination)
-                } else { lastExport=destination; nextOutputURL=uniqueOutput(for:source) }
+                } else { exportedClip.set(destination); nextOutputURL=uniqueOutput(for:source) }
             } catch ExportFailure.cancelled { }
             catch { self.error=error.localizedDescription }
         }
     }
     func cancel() { encoder?.cancel() }
     func cancelAndQuit() { quitAfterExport=true; encoder?.cancel() }
-    func revealExport() { if let lastExport { NSWorkspace.shared.activateFileViewerSelecting([lastExport]) } }
+    private var managedExportDirectories:[URL] { [TemporaryImport.root]+(temporarySource.map { [$0.directory] } ?? []) }
 }
 
 @MainActor final class ExportSavePanelValidator:NSObject,NSOpenSavePanelDelegate {
     let source:URL
-    init(source:URL) { self.source=source }
+    let managedDirectories:[URL]
+    init(source:URL,managedDirectories:[URL]=[TemporaryImport.root]) { self.source=source; self.managedDirectories=managedDirectories }
     func panel(_ sender:Any,validate url:URL) throws {
-        try ExportDestination.validate(source:source,destination:url)
+        try ExportDestination.validate(source:source,destination:url,managedDirectories:managedDirectories)
     }
 }
