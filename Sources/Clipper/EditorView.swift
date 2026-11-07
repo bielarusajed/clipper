@@ -10,6 +10,7 @@ struct EditorView:View {
     @State private var ratioWidth="16"
     @State private var ratioHeight="9"
     @State private var qualityGesture:UUID?
+    @State private var qualityDragging=false
     private enum Field:Hashable { case start, end, width, height }
     @FocusState private var focusedField:Field?
     @State private var availableWindowSize=CGSize(width:CGFloat.infinity,height:CGFloat.infinity)
@@ -50,12 +51,15 @@ struct EditorView:View {
             syncRatio()
         }
         .onChange(of:focusedField) { old,new in
-            editor.textEditing=new != nil
+            // Invalidate command presentation; routing always reads the actual responder.
+            editor.objectWillChange.send()
             if old == .width || old == .height { commitRatio() }
+            if old == .start { startText=TimeText.format(editor.inTime) }
+            if old == .end { endText=TimeText.format(editor.end?.time ?? 0) }
         }
-        .onReceive(NotificationCenter.default.publisher(for:NSControl.textDidBeginEditingNotification)) { _ in editor.textEditing=true }
-        .onReceive(NotificationCenter.default.publisher(for:NSControl.textDidChangeNotification)) { _ in editor.textEditing=true }
-        .onReceive(NotificationCenter.default.publisher(for:NSControl.textDidEndEditingNotification)) { _ in editor.textEditing=false }
+        .onReceive(NotificationCenter.default.publisher(for:NSControl.textDidBeginEditingNotification)) { _ in editor.objectWillChange.send() }
+        .onReceive(NotificationCenter.default.publisher(for:NSControl.textDidEndEditingNotification)) { _ in editor.objectWillChange.send() }
+        .onReceive(NotificationCenter.default.publisher(for:NSWindow.didBecomeKeyNotification)) { _ in editor.objectWillChange.send() }
         .onChange(of:editor.edit) { _,_ in if focusedField != .width && focusedField != .height { syncRatio() } }
         .onChange(of:editor.start) { _,_ in startText=TimeText.format(editor.inTime) }
         .onChange(of:editor.end) { _,value in endText=TimeText.format(value?.time ?? 0) }
@@ -77,6 +81,7 @@ struct EditorView:View {
         ratioHeight=editor.edit.customHeight.formatted(.number.grouping(.never))
     }
     private func commitRatio() {
+        guard editor.edit.cropPreset == .custom else { syncRatio(); return }
         let style=FloatingPointFormatStyle<Double>.number
         guard let width=try? Double(ratioWidth,format:style), let height=try? Double(ratioHeight,format:style),
               width.isFinite, height.isFinite, width>0, height>0, (width/height).isFinite, width/height>0 else { syncRatio(); return }
@@ -240,8 +245,10 @@ struct EditorView:View {
                         Text(editor.edit.quality < 55 ? "Smaller file" : editor.edit.quality > 75 ? "Higher quality" : "Balanced").font(.system(size:10)).foregroundStyle(C1.muted)
                     }
                     Slider(value:Binding(get:{editor.edit.quality},set:{ value in
+                        guard !qualityDragging || qualityGesture != nil else { return }
                         editor.updateSettings("Quality",gesture:qualityGesture) { $0.quality=value }
                     }),in:20...95,step:1,onEditingChanged:{ editing in
+                        qualityDragging=editing
                         if editing { qualityGesture=editor.beginEditGesture("Quality") }
                         else { editor.endEditGesture(qualityGesture); qualityGesture=nil }
                     }).controlSize(.mini).accessibilityLabel("Output quality")

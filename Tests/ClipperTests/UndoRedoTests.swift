@@ -69,10 +69,10 @@ final class UndoRedoTests:XCTestCase {
         for value in 1...20 { editor.updateSettings("Crop",gesture:crop) { $0.crop.origin.x=Double(value)/100 } }
         editor.endEditGesture(crop)
         let moved=editor.snapshot
-        editor.undoEdit(); XCTAssertEqual(editor.snapshot,preset)
-        editor.undoEdit(); XCTAssertEqual(editor.snapshot,quality)
-        editor.undoEdit(); XCTAssertEqual(editor.snapshot,before); XCTAssertFalse(editor.canUndo)
-        for _ in 0..<3 { editor.redoEdit() }
+        editor.undoEdit(); try await ready(editor); XCTAssertEqual(editor.snapshot,preset)
+        editor.undoEdit(); try await ready(editor); XCTAssertEqual(editor.snapshot,quality)
+        editor.undoEdit(); try await ready(editor); XCTAssertEqual(editor.snapshot,before); XCTAssertFalse(editor.canUndo)
+        for _ in 0..<3 { editor.redoEdit(); try await ready(editor) }
         XCTAssertEqual(editor.snapshot,moved)
     }
     @MainActor func testTrimDragFinalRequestCompletesAfterMouseUpAsOneEntry() async throws {
@@ -87,16 +87,17 @@ final class UndoRedoTests:XCTestCase {
         XCTAssertEqual(editor.snapshot,before); XCTAssertFalse(editor.canUndo)
         editor.redoEdit(); try await ready(editor); XCTAssertEqual(editor.snapshot,after)
     }
-    @MainActor func testUndoWhileDragClosingRejectsLateFrames() async throws {
+    @MainActor func testUndoWaitsForClosingDragAndPreservesPreviousEdit() async throws {
         let editor=try await opened(); defer { editor.close() }
         editor.updateSettings("Quality") { $0.quality=85 }
         let drag=try XCTUnwrap(editor.beginEditGesture("Trim Start"))
         editor.markStart(2,gesture:drag); editor.endEditGesture(drag)
-        editor.undoEdit(); try await ready(editor)
-        // No frame had resolved before undo. The quality change is the last completed edit.
-        XCTAssertEqual(editor.inTime,0); XCTAssertEqual(editor.edit.quality,65)
         XCTAssertFalse(editor.canUndo)
-        editor.redoEdit(); try await ready(editor); XCTAssertEqual(editor.edit.quality,85)
+        editor.undoEdit(); try await ready(editor)
+        XCTAssertEqual(editor.inTime,2,accuracy:0.00001); XCTAssertEqual(editor.edit.quality,85)
+        editor.undoEdit(); try await ready(editor)
+        XCTAssertEqual(editor.inTime,0); XCTAssertEqual(editor.edit.quality,85)
+        editor.undoEdit(); try await ready(editor); XCTAssertEqual(editor.edit.quality,65)
     }
     @MainActor func testSupersedingSeekSettlesResolvedDragWithoutHanging() async throws {
         let editor=try await opened(); defer { editor.close() }
@@ -117,8 +118,8 @@ final class UndoRedoTests:XCTestCase {
         editor.updateSettings("Quality",gesture:first) { $0.quality=20 }
         editor.updateSettings("Quality",gesture:second) { $0.quality=90 }
         editor.endEditGesture(second)
-        editor.undoEdit(); XCTAssertEqual(editor.edit.quality,80)
-        editor.undoEdit(); XCTAssertEqual(editor.edit.quality,65); XCTAssertFalse(editor.canUndo)
+        editor.undoEdit(); try await ready(editor); XCTAssertEqual(editor.edit.quality,80)
+        editor.undoEdit(); try await ready(editor); XCTAssertEqual(editor.edit.quality,65); XCTAssertFalse(editor.canUndo)
     }
     @MainActor func testSourceReplacementResetsEvenWhenReopeningSameURL() async throws {
         let editor=try await opened(); defer { editor.close() }
@@ -179,7 +180,7 @@ final class UndoRedoTests:XCTestCase {
         editor.redoEdit(); try await ready(editor)
         XCTAssertTrue(editor.edit.convertToSDR); XCTAssertEqual(editor.edit.codec,.h264)
     }
-    @MainActor func testAudioTrackUndoCancelsAnUnfinishedReopen() async throws {
+    @MainActor func testAudioTrackHistoryWaitsForReopen() async throws {
         let output=fixture("undo-audio-\(UUID().uuidString).mkv")
         defer { try? FileManager.default.removeItem(at:output) }
         let process=Process()
@@ -192,6 +193,8 @@ final class UndoRedoTests:XCTestCase {
         let before=editor.snapshot
         editor.updateSettings("Audio Track") { $0.audioTrack=1 }
         XCTAssertTrue(editor.playback.seeking)
+        XCTAssertFalse(editor.canUndo); editor.undoEdit()
+        try await ready(editor); XCTAssertEqual(editor.edit.audioTrack,1)
         editor.undoEdit(); try await ready(editor)
         XCTAssertEqual(editor.snapshot,before); XCTAssertNil(editor.playback.error)
         editor.redoEdit(); try await ready(editor)
@@ -210,11 +213,13 @@ final class UndoRedoTests:XCTestCase {
         text.insertText("Draft",replacementRange:NSRange(location:0,length:0)); text.breakUndoCoalescing()
         try await Task.sleep(nanoseconds:20_000_000)
         let commands=EditHistoryCommands(editor:editor)
+        XCTAssertTrue(commands.isEnabled(redo:false,in:window))
         commands.perform(redo:false,in:window)
         XCTAssertEqual(text.string,""); XCTAssertEqual(editor.edit.quality,80)
         commands.perform(redo:true,in:window)
         XCTAssertEqual(text.string,"Draft"); XCTAssertEqual(editor.edit.quality,80)
-        window.makeFirstResponder(nil); editor.textEditing=false
+        window.makeFirstResponder(nil)
+        XCTAssertFalse(commands.usesTextUndo(in:window)); XCTAssertTrue(commands.isEnabled(redo:false,in:window))
         commands.perform(redo:false,in:window); try await ready(editor)
         XCTAssertEqual(editor.edit.quality,65); XCTAssertEqual(text.string,"Draft")
     }
@@ -228,6 +233,46 @@ final class UndoRedoTests:XCTestCase {
         XCTAssertTrue(editor.canUndo)
         editor.undoEdit(); try await ready(editor); XCTAssertEqual(editor.edit.quality,65)
         editor.close(); XCTAssertFalse(editor.editUndoManager.canUndo); XCTAssertFalse(editor.editUndoManager.canRedo)
+    }
+    @MainActor func testPendingMarksSurviveStepPlayAndSettings() async throws {
+        let editor=try await opened(); defer { editor.close() }
+        editor.markStart(1); editor.stepFrame(1); try await ready(editor)
+        XCTAssertEqual(editor.inTime,1,accuracy:0.00001)
+        editor.markStart(2); editor.togglePlayback(); try await ready(editor)
+        XCTAssertEqual(editor.inTime,2,accuracy:0.00001)
+        editor.playback.pause()
+        editor.markEnd(4); editor.updateSettings("Quality") { $0.quality=80 }; try await ready(editor)
+        XCTAssertEqual(editor.end?.time ?? 0,4,accuracy:0.00001); XCTAssertEqual(editor.edit.quality,80)
+    }
+    @MainActor func testUndoIsDisabledWhilePlainMarkResolves() async throws {
+        let editor=try await opened(); defer { editor.close() }
+        editor.updateSettings("Quality") { $0.quality=80 }
+        editor.markStart(2)
+        XCTAssertFalse(editor.canUndo); editor.undoEdit(); try await ready(editor)
+        XCTAssertEqual(editor.inTime,2,accuracy:0.00001); XCTAssertEqual(editor.edit.quality,80)
+        editor.undoEdit(); try await ready(editor)
+        XCTAssertEqual(editor.inTime,0); XCTAssertEqual(editor.edit.quality,80)
+    }
+    @MainActor func testNudgesAreIgnoredWhileImporterIsOpen() async throws {
+        let editor=try await opened(); defer { editor.close() }
+        editor.showURLImporter(); editor.nudgeBoundary(start:true,direction:1)
+        try await ready(editor)
+        XCTAssertEqual(editor.inTime,0); XCTAssertFalse(editor.editUndoManager.canUndo)
+        editor.importPresented=false
+    }
+    @MainActor func testGestureCannotMergeWithAnUnresolvedDiscreteMark() async throws {
+        let editor=try await opened(); defer { editor.close() }
+        editor.markStart(1)
+        XCTAssertNil(editor.beginEditGesture("Quality"))
+        try await ready(editor)
+        XCTAssertEqual(editor.inTime,1,accuracy:0.00001)
+        let gesture=try XCTUnwrap(editor.beginEditGesture("Quality"))
+        editor.updateSettings("Quality",gesture:gesture) { $0.quality=80 }
+        editor.endEditGesture(gesture)
+        editor.undoEdit(); try await ready(editor)
+        XCTAssertEqual(editor.inTime,1,accuracy:0.00001); XCTAssertEqual(editor.edit.quality,65)
+        editor.undoEdit(); try await ready(editor)
+        XCTAssertEqual(editor.inTime,0); XCTAssertFalse(editor.canUndo)
     }
     func testNormalizationProducesValidCompleteSettings() {
         let details=MediaDetails(duration:5,origin:0,width:1920,height:1080,rotation:0,pixelAspect:1,fps:24,hdr:true,codec:"hevc",audioLabels:["a","b"],audioStreams:[0,1])

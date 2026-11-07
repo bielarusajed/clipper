@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import AVFoundation
 import SwiftUI
 import UniformTypeIdentifiers
@@ -64,7 +65,7 @@ import UniformTypeIdentifiers
         let manager=UndoManager(); manager.groupsByEvent=false; manager.levelsOfUndo=200
         return manager
     }()
-    @Published var textEditing=false
+    private var historyObservers=Set<AnyCancellable>()
     @Published private(set) var historyRevision=0
     private var sourceGeneration=UUID()
     private var boundaryEpoch=UUID()
@@ -80,11 +81,11 @@ import UniformTypeIdentifiers
     private var historyAvailable:Bool {
         source != nil && !loading && !exporting && !importPresented && !urlImporter.busy
     }
-    var canUndo:Bool { historyAvailable && pendingEdit?.active != true && (editUndoManager.canUndo || pendingEdit.map { $0.before != snapshot } == true) }
-    var canRedo:Bool { historyAvailable && pendingEdit?.active != true && pendingEdit.map { $0.before == snapshot } != false && editUndoManager.canRedo }
+    var canUndo:Bool { historyAvailable && !playback.seeking && !previewStepRunning && pendingEdit?.active != true && (editUndoManager.canUndo || pendingEdit.map { $0.before != snapshot } == true) }
+    var canRedo:Bool { historyAvailable && !playback.seeking && !previewStepRunning && pendingEdit?.active != true && pendingEdit.map { $0.before == snapshot } != false && editUndoManager.canRedo }
 
     @discardableResult func beginEditGesture(_ name:String)->UUID? {
-        guard historyAvailable else { return nil }
+        guard historyAvailable, !playback.seeking, !previewStepRunning else { return nil }
         settlePendingEdit(); cancelNudges()
         let id=UUID(); pendingEdit=PendingEdit(id:id,before:snapshot,name:name)
         historyRevision += 1
@@ -101,8 +102,8 @@ import UniformTypeIdentifiers
         if let pending=pendingEdit {
             pendingEdit=nil
             recordEdit(before:pending.before,after:snapshot,name:pending.name)
+            boundaryEpoch=UUID()
         }
-        boundaryEpoch=UUID()
         historyRevision += 1
     }
     private func resetHistory() {
@@ -124,13 +125,13 @@ import UniformTypeIdentifiers
         historyRevision += 1
     }
     func undoEdit() {
-        guard historyAvailable, pendingEdit?.active != true else { return }
-        settlePendingEdit(); cancelNudges(); playback.clearQueuedActions()
+        guard canUndo else { return }
+        settlePendingEdit(); boundaryEpoch=UUID(); cancelNudges(); playback.clearQueuedActions()
         editUndoManager.undo(); historyRevision += 1
     }
     func redoEdit() {
-        guard historyAvailable, pendingEdit?.active != true else { return }
-        settlePendingEdit(); cancelNudges(); playback.clearQueuedActions()
+        guard canRedo else { return }
+        settlePendingEdit(); boundaryEpoch=UUID(); cancelNudges(); playback.clearQueuedActions()
         editUndoManager.redo(); historyRevision += 1
     }
     private func restoreEdit(_ value:EditSnapshot) {
@@ -152,7 +153,7 @@ import UniformTypeIdentifiers
         var next=edit; mutate(&next)
         next.normalize(previous:edit,details:details)
         guard next != edit else { return }
-        cancelNudges(); boundaryEpoch=UUID(); invalidatePreview()
+        cancelNudges(); invalidatePreview()
         edit=next
         applyAudio(previous:before.settings,at:playback.position)
         if gesture == nil { recordEdit(before:before,after:snapshot,name:name) }
@@ -171,6 +172,9 @@ import UniformTypeIdentifiers
     init() {
         outputPlayer.actionAtItemEnd = .pause
         outputPlayer.automaticallyWaitsToMinimizeStalling=false
+        // Menu availability also depends on the decoder and importer state.
+        playback.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }.store(in:&historyObservers)
+        urlImporter.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }.store(in:&historyObservers)
     }
     deinit {
         if let previewObserver { outputPlayer.removeTimeObserver(previewObserver) }
@@ -241,7 +245,7 @@ import UniformTypeIdentifiers
         download?.dispose()
     }
     func nudgeBoundary(start:Bool,direction:Int) {
-        guard !loading, !exporting else { return }
+        guard historyAvailable else { return }
         settlePendingEdit(); returnToOriginal()
         nudges.append(BoundaryNudge(start:start,direction:direction)); processNudge()
     }
@@ -282,7 +286,7 @@ import UniformTypeIdentifiers
         refreshBoundary(start:start)
     }
     private func refreshBoundary(start:Bool) { lastBoundaryIsStart=start; boundaryRevision += 1 }
-    func seek(_ time: Double) { guard !loading else { return }; settlePendingEdit(); cancelNudges(); returnToOriginal(); playback.clearQueuedActions(); playback.seek(time) }
+    func seek(_ time: Double) { guard !loading else { return }; settlePendingEdit(); boundaryEpoch=UUID(); cancelNudges(); returnToOriginal(); playback.clearQueuedActions(); playback.seek(time) }
     func markStart(_ time:Double?=nil,gesture:UUID?=nil) { markBoundary(time,start:true,gesture:gesture) }
     func markEnd(_ time:Double?=nil,gesture:UUID?=nil) { markBoundary(time,start:false,gesture:gesture) }
     private func markBoundary(_ time:Double?,start:Bool,gesture:UUID?) {

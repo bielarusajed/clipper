@@ -96,20 +96,23 @@ import AppKit
 /// Menu shortcuts route text editing through AppKit and complete edits through our manager.
 struct EditHistoryCommands:Commands {
     @ObservedObject var editor:Editor
-    private var nativeText:Bool { editor.textEditing || editor.importPresented || NSApp.keyWindow?.firstResponder is NSText || NSApp.keyWindow is NSPanel }
-    private var manager:UndoManager? { nativeText ? NSApp.keyWindow?.firstResponder?.undoManager : editor.editUndoManager }
+    func usesTextUndo(in window:NSWindow?)->Bool { window?.firstResponder is NSText || window is NSPanel }
+    func isEnabled(redo:Bool,in window:NSWindow?)->Bool {
+        usesTextUndo(in:window) || (redo ? editor.canRedo : editor.canUndo)
+    }
+    private var nativeText:Bool { usesTextUndo(in:NSApp.keyWindow) }
     var body:some Commands {
         CommandGroup(replacing:.undoRedo) {
-            Button(manager?.undoMenuItemTitle ?? "Undo") { perform(redo:false) }
+            Button(nativeText ? "Undo" : editor.editUndoManager.undoMenuItemTitle) { perform(redo:false) }
                 .keyboardShortcut("z")
-                .disabled(nativeText ? manager?.canUndo != true : !editor.canUndo)
-            Button(manager?.redoMenuItemTitle ?? "Redo") { perform(redo:true) }
+                .disabled(!isEnabled(redo:false,in:NSApp.keyWindow))
+            Button(nativeText ? "Redo" : editor.editUndoManager.redoMenuItemTitle) { perform(redo:true) }
                 .keyboardShortcut("z",modifiers:[.command,.shift])
-                .disabled(nativeText ? manager?.canRedo != true : !editor.canRedo)
+                .disabled(!isEnabled(redo:true,in:NSApp.keyWindow))
         }
     }
     func perform(redo:Bool,in window:NSWindow?=NSApp.keyWindow) {
-        if window?.firstResponder is NSText || editor.importPresented || window is NSPanel {
+        if usesTextUndo(in:window) {
             let action=NSSelectorFromString(redo ? "redo:" : "undo:")
             NSApp.sendAction(action,to:window,from:nil)
         } else if redo { editor.redoEdit() }
