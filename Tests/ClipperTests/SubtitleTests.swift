@@ -264,3 +264,54 @@ extension SubtitleTests {
         XCTAssertLessThan(try luminance(output,time:3.5).max() ?? 255,30)
     }
 }
+
+extension SubtitleTests {
+    @MainActor func testDisabledCatalogAndTrackChangesDoNotExtract() async throws {
+        let c=SubtitleController(); c.open(fixture("two-tracks.mkv"),details:try details("two-tracks.mkv"))
+        try await wait { !c.scanning }
+        c.sourceSelectionChanged() // SwiftUI observes the catalog's default source/track.
+        XCTAssertFalse(c.enabled); XCTAssertFalse(c.preparing); XCTAssertNil(c.render); XCTAssertNil(c.message)
+        c.track=c.tracks[1].id; c.sourceSelectionChanged()
+        XCTAssertFalse(c.preparing); XCTAssertNil(c.render)
+        c.enabled=true; c.prepare(); try await wait { !c.preparing }
+        XCTAssertNotNil(c.render); XCTAssertTrue(c.render?.preserve == true)
+        c.enabled=false; c.track=c.tracks[0].id; c.sourceSelectionChanged()
+        XCTAssertNil(c.render,"Changing a disabled selection must discard the previous track's asset")
+        XCTAssertFalse(c.preparing)
+        c.enabled=true; c.prepare(); try await wait { !c.preparing }
+        XCTAssertNotNil(c.render)
+        let text=try String(contentsOf:XCTUnwrap(c.render).file,encoding:.utf8)
+        XCTAssertTrue(text.contains("Subtitle parity")); XCTAssertFalse(text.contains("Authored position"))
+        c.reset()
+    }
+    @MainActor func testSelectingSameFileReloadsTextAndInvalidatesEncodedPreview() async throws {
+        let editor=Editor(); editor.open(fixture("black.mp4"))
+        defer { editor.close() }
+        try await wait { !editor.loading && !editor.playback.seeking && !editor.subtitles.scanning }
+        let directory=try SubtitleDirectory(),file=directory.url.appendingPathComponent("dialogue.srt")
+        let text=try String(contentsOf:fixture("dialogue.srt"),encoding:.utf8)
+        try text.write(to:file,atomically:true,encoding:.utf8)
+        editor.subtitles.enabled=true; editor.importSubtitles(file)
+        try await wait { !editor.subtitles.preparing }
+        editor.preview()
+        try await wait { !editor.exporting && editor.previewReady }
+        let preview=try XCTUnwrap(editor.previewURL)
+        XCTAssertTrue(FileManager.default.fileExists(atPath:preview.path))
+        try text.replacingOccurrences(of:"Subtitle parity",with:"Updated subtitle").write(to:file,atomically:true,encoding:.utf8)
+        editor.importSubtitles(file)
+        XCTAssertEqual(editor.subtitles.external,file)
+        XCTAssertNil(editor.previewURL); XCTAssertFalse(editor.previewReady); XCTAssertNil(editor.outputPlayer.currentItem)
+        XCTAssertFalse(FileManager.default.fileExists(atPath:preview.path))
+        try await wait { !editor.subtitles.preparing }
+        XCTAssertTrue(try String(contentsOf:XCTUnwrap(editor.subtitles.render).file,encoding:.utf8).contains("Updated subtitle"))
+    }
+    @MainActor func testExplicitImportWhileDisabledSurvivesSelectionCallbacks() async throws {
+        let editor=Editor(); editor.subtitles.open(fixture("two-tracks.mkv"),details:try details("two-tracks.mkv"))
+        defer { editor.subtitles.reset() }
+        try await wait { !editor.subtitles.scanning }
+        editor.importSubtitles(fixture("dialogue.srt"))
+        editor.subtitles.sourceSelectionChanged()
+        try await wait { !editor.subtitles.preparing }
+        XCTAssertFalse(editor.subtitles.enabled); XCTAssertNotNil(editor.subtitles.render); XCTAssertNil(editor.subtitles.message)
+    }
+}

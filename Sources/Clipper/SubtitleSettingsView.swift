@@ -35,7 +35,7 @@ struct SubtitleSettingsView:View {
                                 Spacer(minLength:0)
                                 Button { subtitles.external=nil; subtitles.prepare() } label: { Image(systemName:"xmark.circle.fill") }.buttonStyle(.plain).accessibilityLabel("Clear subtitle file")
                             } else { Text("SRT, WebVTT, ASS or SSA").foregroundStyle(C1.muted); Spacer(minLength:0) }
-                            Button(subtitles.external == nil ? "Choose…" : "Change…") { subtitles.chooseFile() }.controlSize(.small)
+                            Button(subtitles.external == nil ? "Choose…" : "Change…") { if let url=subtitles.chooseFile() { editor.importSubtitles(url) } }.controlSize(.small)
                         }
                     }
                     if subtitles.scanning || subtitles.preparing { HStack { ProgressView().controlSize(.mini); Text("Preparing subtitles…") } }
@@ -62,7 +62,7 @@ struct SubtitleSettingsView:View {
         .onChange(of:subtitles.overrideStyle) { _,_ in changedStyle() }
 
     }
-    private func changedSource() { editor.invalidatePreview(); subtitles.prepare() }
+    private func changedSource() { editor.invalidatePreview(); subtitles.sourceSelectionChanged() }
     private func changedStyle() { editor.invalidatePreview(); subtitles.rebuild(details:details,edit:editor.edit) }
     private var stylePopover:some View {
         VStack(alignment:.leading,spacing:12) {

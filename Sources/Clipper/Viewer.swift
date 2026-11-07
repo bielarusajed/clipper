@@ -210,7 +210,7 @@ struct ComparisonSurface:NSViewRepresentable {
             CATransaction.commit()
         }
         private func renderSubtitles() {
-            guard let asset=subtitleAsset,let details,let playback,mode != .output else { subtitleLayer.contents=nil; lastSubtitleRequest=nil; return }
+            guard let asset=subtitleAsset,let details,let playback,mode != .output else { if subtitleLayer.contents != nil { subtitleLayer.contents=nil }; lastSubtitleRequest=nil; return }
             guard !subtitleBusy else { return }
             let g=edit.geometry(for:details)
             let width=asset.preserve ? Int(details.displaySize.width/2)*2 : g.outWidth

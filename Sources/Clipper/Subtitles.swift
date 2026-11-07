@@ -179,6 +179,9 @@ final class SubtitleProcess: @unchecked Sendable {
     private var preparedStyled=false
     private var preparedZero=0.0
     private var renderedText:String?
+    private struct Selection:Equatable { let kind:SubtitleSource; let track:Int; let file:URL? }
+    private var selection:Selection { Selection(kind:sourceKind,track:sourceKind == .container ? track : 0,file:sourceKind == .external ? external : nil) }
+    private var preparationSelection:Selection?
     private var job:SubtitleProcess?
     private var task:Task<Void,Never>?
     private var epoch=UUID()
@@ -189,7 +192,7 @@ final class SubtitleProcess: @unchecked Sendable {
     var ready:Bool { !enabled || (render != nil && !scanning && !preparing && message == nil) }
     func reset() {
         epoch=UUID(); task?.cancel(); task=nil; job?.cancel(); job=nil
-        enabled=false; tracks=[]; unsupported=0; external=nil; render=nil; renderedText=nil; prepared=nil; directory=nil; video=nil
+        enabled=false; tracks=[]; unsupported=0; external=nil; render=nil; renderedText=nil; preparationSelection=nil; prepared=nil; directory=nil; video=nil
         scanning=false; preparing=false; message=nil; sourceKind = .external; overrideStyle=false
     }
     func open(_ video:URL,details:MediaDetails) {
@@ -210,15 +213,30 @@ final class SubtitleProcess: @unchecked Sendable {
             } catch { if let self,self.epoch==token { self.scanning=false; self.message=error.localizedDescription } }
         }
     }
-    func chooseFile() {
+    func chooseFile() -> URL? {
         let panel=NSOpenPanel(); panel.allowsMultipleSelection=false; panel.canChooseDirectories=false
         panel.message="Choose UTF-8 or UTF-16 SRT, WebVTT, ASS or SSA subtitles."
-        if panel.runModal() == .OK, let url=panel.url { external=url; sourceKind = .external; prepare() }
+        return panel.runModal() == .OK ? panel.url : nil
+    }
+    /// Catalog defaults and disabled track changes must not start a full-file extraction.
+    /// Keep an explicit file import already preparing the same selection.
+    func sourceSelectionChanged() {
+        guard !scanning else { return }
+        if !enabled {
+            if preparationSelection != selection { discardPreparation() }
+        } else if !preparing || preparationSelection != selection {
+            prepare()
+        }
+    }
+    private func discardPreparation() {
+        job?.cancel(); task?.cancel(); epoch=UUID()
+        render=nil; renderedText=nil; prepared=nil; preparationSelection=nil; message=nil; preparing=false
     }
     func prepare() {
         guard !scanning else { return }
-        job?.cancel(); task?.cancel(); let token=UUID(); epoch=token
-        render=nil; renderedText=nil; prepared=nil; message=nil; preparing=false
+        discardPreparation()
+        let token=epoch
+        preparationSelection=selection
         guard let video, let dir=directory else { return }
         let selected=sourceKind, file=external, styled=self.styled, zero=sourceKind == .external ? origin : 0, stream=track
         guard selected == .container || file != nil else { message=enabled ? "Choose a subtitle file." : nil; return }

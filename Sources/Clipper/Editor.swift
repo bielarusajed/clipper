@@ -222,6 +222,12 @@ import UniformTypeIdentifiers
         playback.setMuted(edit.muted)
         if let details { subtitles.rebuild(details:details,edit:edit) }
     }
+    func importSubtitles(_ url:URL) {
+        guard !exporting else { return }
+        // A repeated URL can contain new text, so URL equality cannot invalidate this sample.
+        invalidatePreview()
+        subtitles.external=url; subtitles.sourceKind = .external; subtitles.prepare()
+    }
     func invalidatePreview() {
         revision=UUID(); stopPreviewTracking(); previewStatus=nil
         outputPlayer.pause(); outputPlayer.replaceCurrentItem(with:nil)
