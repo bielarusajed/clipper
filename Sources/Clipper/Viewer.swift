@@ -216,7 +216,7 @@ struct ComparisonSurface:NSViewRepresentable {
             let width=asset.preserve ? Int(details.displaySize.width/2)*2 : g.outWidth
             let height=asset.preserve ? Int(details.displaySize.height/2)*2 : g.outHeight
             let playing=playback.playing
-            let ms=asset.milliseconds(frame:playing ? nil : playback.frame,relativeTime:playing ? playback.clock.currentTime().seconds : playback.position,origin:details.origin)
+            let ms=asset.milliseconds(frame:playing ? nil : playback.frame,relativeTime:playing ? playback.currentSourceTime : playback.position,origin:details.origin)
             let canvas:CGRect
             if mode == .original {
                 let sx=bounds.width/details.displaySize.width,sy=bounds.height/details.displaySize.height

@@ -39,6 +39,19 @@ import UniformTypeIdentifiers
     @Published private(set) var previewReady=false
     @Published private(set) var previewPosition=0.0
     @Published private(set) var previewPlaying=false
+    @Published private(set) var loopEnabled=false
+    @Published private(set) var auditioning=false
+    private var transportOperation=UUID()
+    var canAudition:Bool { source != nil && start != nil && end != nil && clipDuration>0 && !loading && !exporting && !importPresented }
+    var auditionHelp:String {
+        if previewMode != .original && !previewCoversCut { return "Audition the cut in Original, outside this encoded sample (⇧⌘L)" }
+        return "Play the last second before the selected end (⇧⌘L)"
+    }
+    private var previewCoversCut:Bool { previewStart+previewDuration >= outTime-0.000001 }
+    private var encodedDuration:Double {
+        let duration=outputPlayer.currentItem?.duration.seconds ?? .nan
+        return duration.isFinite && duration>0 ? min(duration,previewDuration) : previewDuration
+    }
     @Published private(set) var comparisonPreparing=false
     @Published var previewStart=0.0
     @Published var previewDuration=0.0
@@ -69,7 +82,7 @@ import UniformTypeIdentifiers
     private var nudgeEpoch=UUID()
     var showOutput:Bool { previewMode == .output }
     var displayedPosition:Double { previewMode == .original ? playback.position : previewStart+previewPosition }
-    var isPlaying:Bool { previewMode == .original ? playback.playing : previewPlaying || desiredPreviewPlay }
+    var isPlaying:Bool { previewMode == .original ? playback.transportWanted : auditioning || previewPlaying || desiredPreviewPlay }
     var details: MediaDetails? { playback.details }
     var inTime: Double { start?.time ?? 0 }
     var outTime: Double { min(end?.end ?? details?.duration ?? 0,details?.duration ?? 0) }
@@ -119,6 +132,7 @@ import UniformTypeIdentifiers
             pendingEdit=nil
             recordEdit(before:pending.before,after:snapshot,name:pending.name)
             boundaryEpoch=UUID()
+            if loopEnabled { playback.prepareLoop(start:inTime) }
         }
         historyRevision += 1
     }
@@ -152,7 +166,7 @@ import UniformTypeIdentifiers
     }
     private func restoreEdit(_ value:EditSnapshot) {
         let old=snapshot
-        invalidatePreview(); playback.pause()
+        interruptTransport(); invalidatePreview(); playback.pause()
         start=value.start; end=value.end; edit=value.settings
         playback.endTime=outTime
         let target=old.start != start ? inTime : old.end != end ? end?.time ?? inTime : playback.position
@@ -163,6 +177,7 @@ import UniformTypeIdentifiers
         if let details { subtitles.rebuild(details:details,edit:edit) }
         refreshWaveform()
         refreshBoundary(start:true)
+        if loopEnabled { playback.prepareLoop(start:inTime) }
     }
     func updateSettings(_ name:String,gesture:UUID?=nil,_ mutate:(inout EditSettings)->Void) {
         guard historyAvailable else { return }
@@ -184,7 +199,7 @@ import UniformTypeIdentifiers
     }
     private func applyAudio(previous:EditSettings,at time:Double) {
         if edit.audioTrack != previous.audioTrack, let source {
-            waveform.cancel()
+            interruptTransport(); waveform.cancel()
             let duration=details?.duration, generation=sourceGeneration
             playback.open(source,audioTrack:edit.audioTrack,at:time,completion:{ [weak self] in
                 guard let self, self.sourceGeneration == generation else { return }
@@ -239,7 +254,7 @@ import UniformTypeIdentifiers
         guard !exporting, !importPresented else { return }
         settlePendingEdit(); cancelNudges()
         urlImporter.begin(url:url)
-        playback.pause(); outputPlayer.pause(); importPresented=true
+        interruptTransport(); importPresented=true
     }
     func openPanel() {
         guard !urlImporter.busy else { return }
@@ -257,6 +272,7 @@ import UniformTypeIdentifiers
         importTimeline=temporary?.timeline
         importTimeNote=temporary?.range == nil ? nil : "Original video times · imported section"
         defer { if let previous { playback.queue.async { withExtendedLifetime(previous) {} } } }
+        interruptTransport(); loopEnabled=false
         subtitles.reset()
         resetHistory(); cancelNudges(); timelineZoom=0
         let id=UUID(); loadingID=id; loading=true
@@ -288,6 +304,7 @@ import UniformTypeIdentifiers
     }
     func close() {
         guard !exporting, !urlImporter.busy else { return }
+        interruptTransport(); loopEnabled=false
         subtitles.reset(); waveform.resetSource()
         resetHistory(); cancelNudges()
         loadingID=UUID(); loading=false
@@ -305,7 +322,7 @@ import UniformTypeIdentifiers
     }
     func nudgeBoundary(start:Bool,direction:Int) {
         guard historyAvailable else { return }
-        settlePendingEdit(); returnToOriginal()
+        settlePendingEdit(); interruptTransport(); returnToOriginal()
         nudges.append(BoundaryNudge(start:start,direction:direction)); processNudge()
     }
     private func cancelNudges() { nudgeEpoch=UUID(); nudges=[]; nudgeRunning=false }
@@ -343,9 +360,10 @@ import UniformTypeIdentifiers
         }
         if gesture == nil { recordEdit(before:before,after:snapshot,name:start ? "Trim Start" : "Trim End") }
         refreshBoundary(start:start)
+        if loopEnabled && gesture == nil { playback.prepareLoop(start:inTime) }
     }
     private func refreshBoundary(start:Bool) { lastBoundaryIsStart=start; boundaryRevision += 1 }
-    func seek(_ time: Double) { guard !loading else { return }; settlePendingEdit(); boundaryEpoch=UUID(); cancelNudges(); returnToOriginal(); playback.clearQueuedActions(); playback.seek(time) }
+    func seek(_ time: Double) { guard !loading else { return }; settlePendingEdit(); interruptTransport(); boundaryEpoch=UUID(); cancelNudges(); returnToOriginal(); playback.clearQueuedActions(); playback.seek(time) }
     func markStart(_ time:Double?=nil,gesture:UUID?=nil) { markBoundary(time,start:true,gesture:gesture) }
     func markEnd(_ time:Double?=nil,gesture:UUID?=nil) { markBoundary(time,start:false,gesture:gesture) }
     private func markBoundary(_ time:Double?,start:Bool,gesture:UUID?) {
@@ -353,7 +371,7 @@ import UniformTypeIdentifiers
         if let gesture {
             guard pendingEdit?.id == gesture, pendingEdit?.active == true else { return }
         } else { settlePendingEdit() }
-        cancelNudges()
+        cancelNudges(); auditioning=false
         resolveBoundary(time,start:start,gesture:gesture,epoch:boundaryEpoch)
     }
     private func resolveBoundary(_ time:Double?,start:Bool,gesture:UUID?,epoch:UUID) {
@@ -415,6 +433,7 @@ import UniformTypeIdentifiers
         subtitles.importExternal(url)
     }
     func invalidatePreview() {
+        if previewMode != .original { interruptTransport() }
         revision=UUID(); stopPreviewTracking(); previewStatus=nil
         outputPlayer.pause(); outputPlayer.replaceCurrentItem(with:nil)
         previewMode = .original; previewReady=false; previewPosition=0
@@ -423,22 +442,62 @@ import UniformTypeIdentifiers
         if exporting && jobLabel == "Rendering preview" { encoder?.cancel() }
     }
     func returnToOriginal() { if previewMode != .original { switchPreviewMode(.original) } }
-    func togglePlayback() {
-        guard !loading else { return }
+    /// Loop is a preference for the current source; changing it never starts transport.
+    func toggleLoop() {
+        guard canAudition else { return }
+        loopEnabled.toggle()
+        if previewMode == .original && !auditioning { playback.setLooping(loopEnabled) }
+        if loopEnabled { playback.prepareLoop(start:inTime) }
+    }
+    private func interruptTransport(cancelSteps:Bool=true) {
+        transportOperation=UUID(); auditioning=false
+        playback.pause()
+        if cancelSteps {
+            previewSteps=[]; afterPreviewSteps=[]; previewStepRunning=false
+            playback.stopChasing()
+        }
+        if !previewStepRunning { previewOperation=UUID(); comparisonPreparing=false }
+        desiredPreviewPlay=false; previewPlaying=false
+        outputPlayer.pause()
+    }
+    func auditionCut() {
+        guard canAudition else { return }
         settlePendingEdit()
         cancelNudges()
+        if previewMode != .original && !previewCoversCut { returnToOriginal() }
+        interruptTransport(); auditioning=true
+        let operation=transportOperation
+        if previewMode == .original {
+            playback.playRange(from:max(inTime,outTime-1),until:outTime,loopStart:inTime,looping:false,onEnd:{ [weak self] in
+                guard self?.transportOperation==operation else { return }; self?.auditioning=false
+            })
+        } else {
+            // Resolve through source timestamps so VFR auditions begin on a whole frame.
+            playback.seek(previewStart+max(0,encodedDuration-1),onFailure:{ [weak self] in self?.interruptTransport() }) { [weak self] in
+                guard let self, self.transportOperation==operation else { return }
+                self.seekOutput(max(0,(self.playback.frame?.time ?? self.previewStart)-self.previewStart),playAfter:true)
+            }
+        }
+    }
+    func togglePlayback() {
+        guard canAudition else { return }
+        settlePendingEdit(); cancelNudges()
+        if isPlaying {
+            let time=currentOutputTime
+            interruptTransport()
+            if previewMode != .original { seekOutput(time,playAfter:false) }
+            return
+        }
+        auditioning=false
         if previewMode != .original {
             guard previewReady else { return }
             if previewStepRunning { afterPreviewSteps.append { [weak self] in self?.togglePlayback() }; return }
-            if previewPlaying || desiredPreviewPlay {
-                seekOutput(currentOutputTime,playAfter:false)
-            } else {
-                let time=currentOutputTime >= previewDuration-0.03 ? 0 : currentOutputTime
-                seekOutput(time,playAfter:true)
-            }
+            let time=currentOutputTime >= encodedDuration-0.03 ? 0 : currentOutputTime
+            seekOutput(time,playAfter:true)
         } else {
-            if !playback.playing && playback.position >= outTime-0.00001 { playback.seek(inTime,completion:{ self.playback.play() }) }
-            else { playback.toggle() }
+            let atEnd=(playback.frame?.end ?? playback.position) >= outTime-0.000001
+            let outside=playback.position<inTime || playback.position>=outTime
+            playback.playRange(from:atEnd || outside ? inTime : nil,until:outTime,loopStart:inTime,looping:loopEnabled)
         }
     }
     func switchPreview(_ output: Bool) {
@@ -447,16 +506,19 @@ import UniformTypeIdentifiers
     func switchPreviewMode(_ mode:PreviewMode) {
         guard mode == .original || (previewReady && previewURL != nil && !loading && !exporting) else { return }
         guard mode != previewMode else { return }
-        settlePendingEdit(); cancelNudges()
+        settlePendingEdit(); cancelNudges(); interruptTransport()
         let time=previewMode == .original ? max(0,min(playback.position-previewStart,max(0,previewDuration-0.000002))) : currentOutputTime
         stopPreviewTracking(); outputPlayer.pause(); playback.pause()
         previewMode=mode; playback.setMuted(mode == .compare ? true : edit.muted)
-        if mode == .original { playback.seek(previewStart+time+0.000002) }
+        if mode == .original { playback.seek(min(outTime-0.000002,previewStart+previewDuration-0.000002,previewStart+time+0.000002)) }
         else { startPreviewTracking(); seekOutput(time,playAfter:false) }
+    }
+    private var outputSourceTime:Double {
+        min(outTime-0.000002,previewStart+previewDuration-0.000002,previewStart+currentOutputTime+0.000002)
     }
     private var currentOutputTime:Double {
         let time=outputPlayer.currentTime().seconds
-        return time.isFinite ? max(0,min(time,max(0,previewDuration-0.000002))) : 0
+        return time.isFinite ? max(0,min(time,max(0,encodedDuration-0.000002))) : 0
     }
     private func stopPreviewTracking() {
         previewEpoch=UUID(); previewOperation=UUID()
@@ -472,15 +534,20 @@ import UniformTypeIdentifiers
                 guard let self, self.previewEpoch==epoch, self.revision==token, self.previewMode != .original else { return }
                 self.previewPosition=self.currentOutputTime
                 if self.previewMode == .compare, self.previewPlaying, !self.comparisonPreparing, !self.previewStepRunning {
-                    self.playback.chase(self.previewStart+self.currentOutputTime+0.000002)
+                    self.playback.chase(self.outputSourceTime)
                 }
             }
         }
         previewEndObserver=NotificationCenter.default.addObserver(forName:.AVPlayerItemDidPlayToEndTime,object:outputPlayer.currentItem,queue:.main) { [weak self] _ in
             Task { @MainActor in
                 guard let self, self.previewEpoch==epoch, self.revision==token else { return }
+                guard self.previewPlaying, self.currentOutputTime >= self.encodedDuration-0.04 else { return }
                 self.previewPlaying=false; self.previewPosition=self.currentOutputTime
-                if self.previewMode == .compare { self.playback.chase(self.previewStart+self.currentOutputTime) }
+                if self.loopEnabled && !self.auditioning { self.seekOutput(0,playAfter:true) }
+                else {
+                    self.auditioning=false
+                    self.seekOutput(max(0,self.encodedDuration-0.000002),playAfter:false)
+                }
             }
         }
     }
@@ -493,7 +560,7 @@ import UniformTypeIdentifiers
         outputPlayer.seek(to:CMTime(seconds:time,preferredTimescale:1000000),toleranceBefore:.zero,toleranceAfter:.zero) { [weak self] finished in
             Task { @MainActor in
                 guard let self, self.previewOperation==operation, self.previewEpoch==epoch, self.revision==token, self.previewMode != .original else { return }
-                guard finished else { self.comparisonPreparing=false; self.desiredPreviewPlay=false; return }
+                guard finished else { self.comparisonPreparing=false; self.desiredPreviewPlay=false; self.auditioning=false; return }
                 self.previewPosition=self.currentOutputTime
                 let ready={ [weak self] in
                     guard let self, self.previewOperation==operation, self.previewEpoch==epoch, self.revision==token else { return }
@@ -501,15 +568,14 @@ import UniformTypeIdentifiers
                     self.desiredPreviewPlay=false
                     if playAfter { self.previewPlaying=true; self.outputPlayer.play() }
                 }
-                if self.previewMode == .compare { self.playback.chase(self.previewStart+self.currentOutputTime+0.000002,completion:ready) }
+                if self.previewMode == .compare { self.playback.chase(self.outputSourceTime,completion:ready) }
                 else { ready() }
             }
         }
     }
     func stepFrame(_ direction:Int) {
         guard !loading, !exporting else { return }
-        settlePendingEdit()
-        cancelNudges()
+        settlePendingEdit(); cancelNudges(); interruptTransport(cancelSteps:false)
         if previewMode == .original { playback.step(direction); return }
         guard previewReady, previewSteps.count<64 else { return }
         previewSteps.append(direction); processPreviewStep()
@@ -530,7 +596,7 @@ import UniformTypeIdentifiers
             } else { self.processPreviewStep() }
         }
         let failure={ [weak self] in guard let self, valid() else { return }; self.previewSteps=[]; self.afterPreviewSteps=[]; finish() }
-        playback.seek(previewStart+currentOutputTime+0.000002,onFailure:failure) { [weak self] in
+        playback.seek(outputSourceTime,onFailure:failure) { [weak self] in
             guard let self, valid() else { return }
             self.playback.step(direction,onFailure:failure) { [weak self] in
                 guard let self, valid(), let frame=self.playback.frame else { return }
@@ -540,7 +606,7 @@ import UniformTypeIdentifiers
                         guard let self, valid() else { return }
                         guard finished else { failure(); return }
                         self.previewPosition=self.currentOutputTime
-                        if self.previewMode == .compare { self.playback.chase(self.previewStart+self.currentOutputTime+0.000002,completion:finish) }
+                        if self.previewMode == .compare { self.playback.chase(self.outputSourceTime,completion:finish) }
                         else { finish() }
                     }
                 }
@@ -614,7 +680,7 @@ import UniformTypeIdentifiers
     private func encode(destination: URL,start: Double,end: Double,isPreview: Bool,replacingExisting:Bool=false) {
         settlePendingEdit(); cancelNudges()
         guard let source, let details else { return }
-        stopPreviewTracking(); previewMode = .original; playback.setMuted(edit.muted)
+        interruptTransport(); stopPreviewTracking(); previewMode = .original; playback.setMuted(edit.muted)
         playback.pause(); outputPlayer.pause()
         let token=revision
         let temporary=destination.deletingLastPathComponent().appendingPathComponent(".clipper-\(UUID().uuidString).mp4")

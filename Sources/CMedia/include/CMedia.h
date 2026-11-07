@@ -45,6 +45,9 @@ const char *clip_audio_label(ClipMedia *media, int track);
 int clip_audio_stream(ClipMedia *media, int track);
 int clip_seek(ClipMedia *media, double time);
 void clip_enable_cache(ClipMedia *media);
+void clip_set_cache(ClipMedia *media, int enabled);
+// Prepare playback at an exact decoded frame boundary, retaining the first video and audio.
+int clip_prepare(ClipMedia *media, double start, ClipRequest *request, int generation);
 // Prepare cached A/V for playback if a complete current decode segment covers start.
 int clip_resume(ClipMedia *media, double start);
 ClipSample clip_next(ClipMedia *media);
