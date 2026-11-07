@@ -10,6 +10,7 @@ import UniformTypeIdentifiers
     private var temporarySource:TemporaryImport?
     @Published var source: URL?
     @Published var edit=EditSettings()
+    private let preferences:ExportPreferences
     @Published var start: FramePoint?
     @Published var end: FramePoint?
     @Published var exporting=false
@@ -59,7 +60,9 @@ import UniformTypeIdentifiers
     var clipDuration: Double { max(0,outTime-inTime) }
     var canExport: Bool { source != nil && start != nil && end != nil && clipDuration > 0 && !loading && !playback.seeking && !previewStepRunning && !exporting && !importPresented }
 
-    init() {
+    init(preferences:ExportPreferences = ExportPreferences()) {
+        self.preferences=preferences
+        edit=preferences.makeSettings()
         outputPlayer.actionAtItemEnd = .pause
         outputPlayer.automaticallyWaitsToMinimizeStalling=false
     }
@@ -96,7 +99,7 @@ import UniformTypeIdentifiers
         defer { if let previous { playback.queue.async { withExtendedLifetime(previous) {} } } }
         cancelNudges(); timelineZoom=0
         let id=UUID(); loadingID=id; loading=true
-        invalidatePreview(); source=url; start=nil; end=nil; edit=EditSettings(); error=nil; lastExport=nil; nextOutputURL=uniqueOutput(for:url)
+        invalidatePreview(); source=url; start=nil; end=nil; edit=preferences.makeSettings(); error=nil; lastExport=nil; nextOutputURL=uniqueOutput(for:url)
         playback.setMuted(false)
         playback.open(url,onFailure:{ [weak self] in self?.loading=false }) { [weak self] in
             guard let self, self.loadingID==id, let info=self.details else { return }
@@ -123,7 +126,7 @@ import UniformTypeIdentifiers
         invalidatePreview(); playback.close()
         let previous=temporarySource; temporarySource=nil
         if let previous { playback.queue.async { withExtendedLifetime(previous) {} } }
-        source=nil; start=nil; end=nil; edit=EditSettings(); lastExport=nil; nextOutputURL=nil; error=nil
+        source=nil; start=nil; end=nil; edit=preferences.makeSettings(); lastExport=nil; nextOutputURL=nil; error=nil
     }
     func prepareToQuit() {
         let download=temporarySource
@@ -194,6 +197,23 @@ import UniformTypeIdentifiers
             guard let self, let frame=self.playback.frame else { return }
             self.commitBoundary(frame,start:false)
         })
+    }
+    func setCodec(_ codec:VideoCodec) {
+        guard !loading, !(details?.hdr == true && !edit.convertToSDR) else { return }
+        preferences.setCodec(codec)
+        var settings=edit; settings.codec=codec; edit=settings
+    }
+    func setQuality(_ quality:Double) {
+        guard !loading, quality.isFinite, (20...95).contains(quality) else { return }
+        preferences.setQuality(quality)
+        var settings=edit; settings.quality=preferences.quality; edit=settings
+    }
+    func setConvertToSDR(_ enabled:Bool) {
+        guard !loading, details?.hdr == true else { return }
+        var settings=edit
+        settings.convertToSDR=enabled
+        settings.codec=enabled ? preferences.codec : .hevc
+        edit=settings
     }
     func settingsChanged(_ previous: EditSettings) {
         guard !loading else { return }
@@ -372,12 +392,14 @@ import UniformTypeIdentifiers
         var destination=uniqueOutput(for:source)
         var replacingExisting=false
         if saveAs || temporarySource != nil {
+            destination=uniqueOutput(for:source,in:preferences.resolvedSaveDirectory())
             let panel=NSSavePanel(); panel.allowedContentTypes=[.mpeg4Movie]; panel.nameFieldStringValue=destination.lastPathComponent
             panel.directoryURL=destination.deletingLastPathComponent()
             panel.canCreateDirectories=true
             let validator=ExportSavePanelValidator(source:source)
             panel.delegate=validator
             guard withExtendedLifetime(validator,{ panel.runModal() }) == .OK, let url=panel.url else { return }; destination=url
+            preferences.recordSaveDirectory(from:destination)
             replacingExisting=FileManager.default.fileExists(atPath:destination.path)
         }
         export(to:destination,replacingExisting:replacingExisting)
@@ -390,8 +412,11 @@ import UniformTypeIdentifiers
     }
     func uniqueOutput(for source: URL) -> URL {
         let parent=temporarySource?.file == source
-            ? FileManager.default.urls(for:.downloadsDirectory,in:.userDomainMask)[0]
+            ? preferences.resolvedSaveDirectory()
             : source.deletingLastPathComponent()
+        return uniqueOutput(for:source,in:parent)
+    }
+    func uniqueOutput(for source:URL,in parent:URL) -> URL {
         let base=source.deletingPathExtension().lastPathComponent
         var n=1
         while true {
