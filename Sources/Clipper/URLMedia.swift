@@ -90,6 +90,26 @@ struct URLMediaFormat: Decodable, Identifiable {
         case protocolName="protocol"
         case note="format_note", dynamicRange="dynamic_range", filesizeApprox="filesize_approx", hasDRM="has_drm"
     }
+    init(from decoder:Decoder) throws {
+        let values=try decoder.container(keyedBy:CodingKeys.self)
+        id=try values.decode(String.self,forKey:.id)
+        ext=try? values.decode(String.self,forKey:.ext)
+        vcodec=try? values.decode(String.self,forKey:.vcodec)
+        acodec=try? values.decode(String.self,forKey:.acodec)
+        width=try? values.decode(Int.self,forKey:.width)
+        height=try? values.decode(Int.self,forKey:.height)
+        fps=try? values.decode(Double.self,forKey:.fps)
+        abr=try? values.decode(Double.self,forKey:.abr)
+        tbr=try? values.decode(Double.self,forKey:.tbr)
+        protocolName=try? values.decode(String.self,forKey:.protocolName)
+        language=try? values.decode(String.self,forKey:.language)
+        note=try? values.decode(String.self,forKey:.note)
+        dynamicRange=try? values.decode(String.self,forKey:.dynamicRange)
+        filesize=try? values.decode(Double.self,forKey:.filesize)
+        filesizeApprox=try? values.decode(Double.self,forKey:.filesizeApprox)
+        // yt-dlp also reports "maybe". Only a literal true rules a format out.
+        hasDRM=try? values.decode(Bool.self,forKey:.hasDRM)
+    }
     // Extractors use "none" for an absent stream; a missing codec can mean unknown.
     var hasVideo:Bool { vcodec != "none" && (vcodec != nil || acodec == nil || width != nil || height != nil) }
     var hasAudio:Bool { acodec != "none" }

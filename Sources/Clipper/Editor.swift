@@ -428,7 +428,10 @@ import UniformTypeIdentifiers
         }
     }
     func cancel() { encoder?.cancel() }
-    func cancelAndQuit() { quitAfterExport=true; encoder?.cancel() }
+    func cancelAndQuit() {
+        if exporting { quitAfterExport=true; encoder?.cancel() }
+        else { prepareToQuit(); NSApp.reply(toApplicationShouldTerminate:true) }
+    }
     private var managedExportDirectories:[URL] { [TemporaryImport.root]+(temporarySource.map { [$0.directory] } ?? []) }
 }
 

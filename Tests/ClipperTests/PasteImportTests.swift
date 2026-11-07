@@ -165,6 +165,27 @@ final class PasteImportTests:XCTestCase {
         XCTAssertNil(model.media)
     }
 
+    @MainActor func testQuitWaitsForCleanupAfterImportWindowHasClosed() async throws {
+        let service=ImportServiceSpy()
+        await service.releaseLookup(); await service.holdCleanup()
+        let model=URLImport(service:service)
+        model.begin(url:URL(string:"https://example.com/one")!)
+        model.download { _ in XCTFail("A closed import must not open a video") }
+        try await waitUntil { await service.downloadCount == 1 }
+        model.endPresentation()
+        XCTAssertFalse(model.busy)
+        XCTAssertTrue(model.hasPendingWork)
+        try await waitUntil { await service.cancelledDownloads == 1 }
+        var finished=false
+        let quitting=Task { await model.cancelAndWait(); finished=true }
+        await Task.yield()
+        XCTAssertFalse(finished,"Quit must wait until subprocess and workspace cleanup finish")
+        await service.releaseCleanup()
+        await quitting.value
+        XCTAssertTrue(finished)
+        XCTAssertFalse(model.hasPendingWork)
+    }
+
     @MainActor func testNativeImportWindowTitleCloseAndCommandReturnDuringLookup() async throws {
         let service=ImportServiceSpy()
         let model=URLImport(service:service)
@@ -213,6 +234,65 @@ final class PasteImportTests:XCTestCase {
         }
     }
 
+    @MainActor func testFailedLookupRefreshesOnceAndDownloadsWithUpdatedTools() async throws {
+        let service=ImportServiceSpy()
+        await service.releaseLookup(); await service.releaseDownload()
+        await service.failLookups(1,canRefresh:true)
+        let model=URLImport(service:service)
+        model.urlText="https://example.com/one"
+        model.showFormats(); model.selectVideo("137"); model.audio="none"
+        var opened=false
+        model.download { _ in opened=true }
+        try await waitUntil { !model.busy }
+        XCTAssertTrue(opened)
+        XCTAssertNil(model.error)
+        assertEqual(await service.lookupCount,2)
+        assertEqual(await service.refreshCount,1)
+        assertEqual(await service.selectors,["137"])
+        assertEqual(await service.downloadedToolVersions,["updated"])
+    }
+
+    @MainActor func testFailedLookupDoesNotRetryRepeatedlyOrExposeBackgroundErrors() async throws {
+        let service=ImportServiceSpy()
+        await service.releaseLookup()
+        await service.failLookups(3,canRefresh:true)
+        let model=URLImport(service:service)
+        model.begin(url:URL(string:"https://example.com/one")!)
+        try await waitUntil { !model.busy }
+        assertEqual(await service.lookupCount,2)
+        assertEqual(await service.refreshCount,1)
+        XCTAssertNil(model.error,"A passive prefetch must stay in the background even if it fails")
+        model.download { _ in XCTFail("A failed lookup cannot open a video") }
+        try await waitUntil { !model.busy }
+        XCTAssertTrue(model.error?.contains("Extractor failed") == true)
+        assertEqual(await service.lookupCount,3)
+        assertEqual(await service.downloadCount,0)
+    }
+
+    @MainActor func testReturnDoesNotDownloadWhileInputMethodIsComposing() async throws {
+        let service=ImportServiceSpy()
+        let model=URLImport(service:service)
+        model.urlText="https://example.com/one"
+        let parent=NSWindow(contentRect:NSRect(x:0,y:0,width:1100,height:800),styleMask:[.titled],backing:.buffered,defer:false)
+        parent.isReleasedWhenClosed=false
+        let controller=URLImportWindowController(importer:model,parent:parent,open:{ _ in XCTFail("Composing text must not download") },onClose:{})
+        defer { controller.close(); parent.close() }
+        let window=try XCTUnwrap(controller.window)
+        let text=NSTextView()
+        window.contentView=text
+        XCTAssertTrue(window.makeFirstResponder(text))
+        text.setMarkedText("あ",selectedRange:NSRange(location:1,length:0),replacementRange:NSRange(location:NSNotFound,length:0))
+        XCTAssertTrue(text.hasMarkedText())
+        for modifiers:NSEvent.ModifierFlags in [[],.command] {
+            let event=try XCTUnwrap(NSEvent.keyEvent(with:.keyDown,location:.zero,modifierFlags:modifiers,timestamp:0,
+                windowNumber:window.windowNumber,context:nil,characters:"\r",charactersIgnoringModifiers:"\r",isARepeat:false,keyCode:36))
+            XCTAssertFalse(window.performKeyEquivalent(with:event))
+            XCTAssertFalse(model.downloadRequested)
+            XCTAssertFalse(model.formatsVisible)
+        }
+        assertEqual(await service.lookupCount,0)
+    }
+
     @MainActor func testNativeReturnDownloadsTheSelectedFormats() async throws {
         let service=ImportServiceSpy()
         await service.releaseLookup(); await service.releaseDownload()
@@ -246,6 +326,12 @@ final class PasteImportTests:XCTestCase {
 private actor ImportServiceSpy:URLImportServicing {
     private var lookupReleased=false
     private var downloadReleased=false
+    private var cleanupHeld=false
+    private var cleanupContinuation:CheckedContinuation<Void,Never>?
+    private var failedLookups=0
+    private var canRefresh=false
+    private(set) var refreshCount=0
+    private(set) var downloadedToolVersions=[String]()
     private(set) var lookupCount=0
     private(set) var downloadCount=0
     private(set) var cancelledLookups=0
@@ -255,14 +341,25 @@ private actor ImportServiceSpy:URLImportServicing {
     private(set) var downloadURLs=[URL]()
     func releaseLookup() { lookupReleased=true }
     func releaseDownload() { downloadReleased=true }
+    func holdCleanup() { cleanupHeld=true }
+    func releaseCleanup() { cleanupHeld=false; cleanupContinuation?.resume(); cleanupContinuation=nil }
+    func failLookups(_ count:Int,canRefresh:Bool) { failedLookups=count; self.canRefresh=canRefresh }
     func prepare(status:@escaping @Sendable(String)->Void) async throws -> ImportTools {
         let executable=URL(fileURLWithPath:"/usr/bin/true")
         return ImportTools(ytDLP:executable,deno:executable,ffmpegDirectory:executable.deletingLastPathComponent(),version:"test",notice:nil)
+    }
+    func refreshAfterFailure(status:@escaping @Sendable(String)->Void) async throws -> ImportTools? {
+        refreshCount += 1
+        guard canRefresh else { return nil }
+        canRefresh=false
+        let tools=try await prepare(status:status)
+        return ImportTools(ytDLP:tools.ytDLP,deno:tools.deno,ffmpegDirectory:tools.ffmpegDirectory,version:"updated",notice:nil)
     }
     func inspect(url:URL,tools:ImportTools) async throws -> URLMedia {
         lookupCount += 1
         do { while !lookupReleased { try await Task.sleep(for:.milliseconds(10)) }; try Task.checkCancellation() }
         catch { cancelledLookups += 1; throw error }
+        if failedLookups > 0 { failedLookups -= 1; throw ImportFailure.message("Extractor failed") }
         let json:[String:Any]=["id":url.absoluteString,"title":"Example","formats":[
             ["format_id":"18","vcodec":"h264","acodec":"aac"],
             ["format_id":"137","vcodec":"h264","acodec":"none"],
@@ -272,8 +369,13 @@ private actor ImportServiceSpy:URLImportServicing {
     func download(url:URL,media:URLMedia,selector:String,excludeAudio:Bool,tools:ImportTools,
                   progress:@escaping @Sendable(ImportProgress)->Void) async throws -> TemporaryImport {
         downloadCount += 1; selectors.append(selector); excludedAudio.append(excludeAudio); downloadURLs.append(url)
+        downloadedToolVersions.append(tools.version)
         do { while !downloadReleased { try await Task.sleep(for:.milliseconds(10)) }; try Task.checkCancellation() }
-        catch { cancelledDownloads += 1; throw error }
+        catch {
+            cancelledDownloads += 1
+            if cleanupHeld { await withCheckedContinuation { cleanupContinuation=$0 } }
+            throw error
+        }
         let directory=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString,isDirectory:true)
         try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true)
         let file=directory.appendingPathComponent("Example.mp4")

@@ -30,6 +30,7 @@ actor ManagedImportTools {
     private let cpuType:UInt32
     private var tail:Task<Void,Never>?
     static let checkInterval:TimeInterval=24*60*60
+    static let recoveryCheckInterval:TimeInterval=60*60
 
     init(root:URL=ManagedImportTools.defaultRoot, now:@escaping @Sendable () -> Date={ Date() },
          fetch:@escaping Fetch=ManagedImportTools.download, run:@escaping Run=ManagedImportTools.smokeTest,
@@ -51,6 +52,21 @@ actor ManagedImportTools {
         return try await withTaskCancellationHandler { try await work.value } onCancel: { work.cancel() }
     }
 
+    /// A broken extractor can pick up a same-day fix without making every bad URL check GitHub.
+    func refreshAfterFailure(status:@escaping @Sendable (String)->Void) async throws -> ImportTools? {
+        let previous=tail
+        let work=Task { [self] () throws -> ImportTools? in
+            await previous?.value
+            try Task.checkCancellation()
+            let current=now()
+            if let checked=loadManifest().checked, checked <= current,
+               current.timeIntervalSince(checked) < Self.recoveryCheckInterval { return nil }
+            return try await perform(force:true,status:status)
+        }
+        tail=Task { _=try? await work.value }
+        return try await withTaskCancellationHandler { try await work.value } onCancel: { work.cancel() }
+    }
+
     // MARK: - Update flow
 
     private func perform(force:Bool, status:@escaping @Sendable (String)->Void) async throws -> ImportTools {
@@ -63,7 +79,7 @@ actor ManagedImportTools {
         let installed=Tool.allCases.allSatisfy { isInstalled($0, manifest) }
         let current=now()
         if installed, !force, let checked=manifest.checked, checked <= current, current.timeIntervalSince(checked) < Self.checkInterval {
-            return tools(manifest, ffmpegDirectory, notice:nil)
+            return tools(manifest, ffmpegDirectory, notice:manifest.notice)
         }
         var problems:[String]=[]
         for tool in Tool.allCases {
@@ -80,8 +96,9 @@ actor ManagedImportTools {
         }
         try Task.checkCancellation()
         manifest.checked=current
+        manifest.notice=problems.isEmpty ? nil : problems.joined(separator:" ")
         try saveManifest(manifest)
-        return tools(manifest, ffmpegDirectory, notice:problems.isEmpty ? nil : problems.joined(separator:" "))
+        return tools(manifest, ffmpegDirectory, notice:manifest.notice)
     }
 
     private func update(_ tool:Tool, _ manifest:inout Manifest, status:@escaping @Sendable (String)->Void) async throws {
@@ -360,6 +377,7 @@ extension ManagedImportTools {
         struct Entry:Codable { var current:String; var previous:String? }
         var tools:[String:Entry]=[:]
         var checked:Date?
+        var notice:String?
     }
 
     private struct GitHubRelease:Decodable {
