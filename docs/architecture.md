@@ -38,13 +38,15 @@ The private FFmpeg build supports HTTPS through macOS SecureTransport. The dated
 
 ## Native UI
 
-The current design is B, Floating, selected from the native glass studies after C1, Frosted studio. One window-wide material sits behind floating inspector and timeline panels. The outer inset and panel gaps are 12 points. The preview selector aligns with the inspector's top; the video shares the timeline column's horizontal bounds, preserves aspect ratio and ends 12 points above it. There is no top rule above the timeline.
+The current design is Compact, selected from the integrated-window-controls study after the Floating glass design and C1. One window-wide material sits behind floating inspector and timeline panels. The inspector is 300 points wide; outer insets and panel gaps are 8 points. The preview selector aligns with the inspector's top; the video shares the timeline column's horizontal bounds, preserves aspect ratio and ends 8 points above it. There is no top rule above the timeline.
+
+The scene hides the window title strip and uses a real empty unified AppKit toolbar. AppKit retains and positions its standard window buttons, including their renderer, shared hover region and green-button tiling. Read-only button geometry sets the header height and filename clearance; full screen releases that clearance. Do not reparent or manually move the buttons, which leaves native group hover tracking behind. Native content-size limits match the full-window workspace. Only static file-header space extends window dragging.
 
 Glass and shadows belong on control/panel shapes, separate from live media layers. Applying compositing, glass or a shadow directly to the video can break native layer ownership or clipping. Keep one persistent source display layer. The app follows system appearance, uses native glass only on macOS 26+, and supplies older-system and Reduce Transparency fallbacks.
 
 Keep source opening in the empty state and preview/export actions pinned below settings. Hide irrelevant audio controls and redundant one-track pickers. The export folder segment opens Save As directly. Timeline shortcuts use separate keycaps; the scrollbar is visible when needed. Preview modes explain their disabled state on hover.
 
-Historical visual sources remain on `prototype/ui-studies` at `eaa1ee3`, `prototype/c-refinements` at `f012eb9`, and `prototype/native-glass` at `083c486`. They are design references; production views are SwiftUI/AppKit.
+Historical visual sources remain on `prototype/ui-studies` at `eaa1ee3`, `prototype/c-refinements` at `f012eb9`, and `prototype/native-glass` at `083c486`. The Compact studies remain on `prototype/integrated-window-controls` at `1bc9442`. They are design references; production views are SwiftUI/AppKit.
 
 ## Distribution
 

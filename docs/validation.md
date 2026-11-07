@@ -1,5 +1,15 @@
 # Validation and known limits
 
+## 0.5.2 Compact window
+
+The integrated run passed 177 tests, with five opt-in checks skipped and zero failures, in 188.1 seconds. It included the supplied 4K AV1 WebM. After the final review fixes, seven focused window, timeline and comparison-layer tests passed. Logs are `.build/compact-full-tests.log` and `.build/compact-final-window-tests.log`.
+
+An offscreen AppKit repro caught the misplaced native group-hover region when controls were reparented or manually moved. Production leaves the controls untouched in a real unified toolbar. The regression now uses the actual SwiftUI editor and checks native ownership, shared tracking coverage for all three buttons, filename clearance, vertical alignment, toolbar lifetime and repeated source changes. Window tests also cover full-frame portrait/landscape sizing and screen limits. A separate native probe established that `contentMaxSize` avoids the extra toolbar offset returned by `maxSize` on this system.
+
+Claude reviewed the production change. The final fixes remove toolbar visibility/customization commands, disallow window tabs, accept the first mouse click in the filename drag region, and measure geometry after native layout. The discarded Chrome Lab app and archives were retired into ignored build folders; its source history remains on the prototype branch.
+
+The self-contained app passed signature verification. Onscreen verification could not be completed: computer use returned `cgWindowNotFound` for both the installed and rebuilt Clipper. A process sample showed the rebuilt app idle in its normal AppKit event loop, not stuck in startup code. Native hover glyph appearance, green-button tiling, focus changes and full-screen round-trips still need a visual pass. The automated geometry checks do not establish those visual results.
+
 ## 0.5.1 window chrome
 
 The native window probe confirmed that blur was enabled, Reduce Transparency was off, and the window background was clear. Its title bar had reverted to an opaque background and visible title after initial setup. The window hook now reapplies transparent, separator-free chrome after SwiftUI updates and deferred sizing. It only changes properties that differ, and keeps the system appearance.

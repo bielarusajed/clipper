@@ -5,13 +5,14 @@ import AppKit
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
     @StateObject private var editor=Editor()
     var body: some Scene {
-        WindowGroup {
+        WindowGroup("Clipper") {
             EditorView(editor:editor,playback:editor.playback)
                 .onAppear { delegate.editor=editor; delegate.deliverPending() }
                 .onOpenURL { editor.open($0) }
         }
+        .windowStyle(.hiddenTitleBar)
+        .windowToolbarStyle(.unified(showsTitle:false))
         .defaultSize(width:EditorWindowLayout.starterSize.width,height:EditorWindowLayout.starterSize.height)
-        .windowStyle(.titleBar)
         .commands {
             EditHistoryCommands(editor:editor)
             CommandGroup(replacing:.newItem) {
@@ -35,7 +36,7 @@ import AppKit
                 Button("Set Start Here") { editor.markStart() }.disabled(editor.exporting || editor.loading)
                 Button("Set End Here") { editor.markEnd() }.disabled(editor.exporting || editor.loading)
             }
-            CommandGroup(after:.toolbar) {
+            CommandGroup(replacing:.toolbar) {
                 Toggle("Show Audio Waveform",isOn:$editor.waveformVisible)
                     .disabled(editor.source == nil || (editor.details?.audioLabels.isEmpty ?? true))
                 Divider()

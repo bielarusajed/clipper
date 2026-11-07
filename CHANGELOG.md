@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.2 · 7 November 2026
+
+- Adopt the Compact window layout, with 8-point panel gaps and native traffic lights inside the inspector header. Remove the separate title strip and prototype switcher.
+- Keep AppKit in charge of window-button placement, glass rendering, shared hover glyphs and tiling. The header measures the native controls rather than moving them.
+- Fit video and window limits to the whole window, including tall sources. Keep transparent chrome stable while source metadata changes.
+
 ## 0.5.1 · 7 November 2026
 
 - Keep the title bar transparent after SwiftUI refreshes or a video opens. Hide the duplicated window title and separator so the top shares the window material. Native glass, system light/dark appearance and Reduce Transparency behavior are unchanged.

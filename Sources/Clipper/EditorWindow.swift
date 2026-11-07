@@ -6,9 +6,11 @@ enum EditorWindowLayout {
     static let starterMinimum=CGSize(width:420,height:400)
     static let editorWidth:CGFloat=1180
     static let editorMinimumWidth:CGFloat=1010
-    static let inset:CGFloat=12
-    static let spacing:CGFloat=12
-    static let sidebarWidth:CGFloat=288
+    static let inset:CGFloat=8
+    static let spacing:CGFloat=8
+    static let sidebarWidth:CGFloat=300
+    static let headerPadding:CGFloat=14
+    static let headerSpacing:CGFloat=8
     static let selectorHeight:CGFloat=30
     static let transportHeight:CGFloat=27
     static let timelineHeight:CGFloat=156
@@ -28,15 +30,36 @@ enum EditorWindowLayout {
     }
 }
 
+/// Read-only native geometry. AppKit owns placement and tracking; SwiftUI reserves
+/// room around the actual controls, including when they leave for full screen.
+struct WindowHeaderLayout:Equatable {
+    var controls:CGRect?=CGRect(x:19,y:19,width:60,height:14)
+    var height:CGFloat { max(36,((controls?.midY ?? 26)-EditorWindowLayout.inset)*2) }
+    var reserve:CGFloat {
+        guard let controls else { return 0 }
+        return max(0,controls.maxX+12-EditorWindowLayout.inset-EditorWindowLayout.headerPadding-EditorWindowLayout.headerSpacing)
+    }
+    @MainActor init(window:NSWindow) {
+        guard !window.styleMask.contains(.fullScreen) else { controls=nil; return }
+        let buttons=[NSWindow.ButtonType.closeButton,.miniaturizeButton,.zoomButton].compactMap { window.standardWindowButton($0) }
+        guard let first=buttons.first else { return }
+        let rect=buttons.dropFirst().reduce(first.convert(first.bounds,to:nil)) { $0.union($1.convert($1.bounds,to:nil)) }
+        controls=CGRect(x:rect.minX,y:window.frame.height-rect.maxY,width:rect.width,height:rect.height)
+    }
+    init() { }
+}
+
 /// Resizes the native window without replacing SwiftUI's window delegate.
 struct EditorWindow:NSViewRepresentable {
     let source:URL?
     let videoSize:CGSize?
     var onAvailableSize:(CGSize)->Void
+    var onHeaderLayout:((WindowHeaderLayout)->Void)?=nil
 
     func makeNSView(context:Context)->WindowHook { WindowHook() }
     func updateNSView(_ view:WindowHook,context:Context) {
         view.onAvailableSize=onAvailableSize
+        view.onHeaderLayout=onHeaderLayout
         view.update(source:source,videoSize:videoSize)
     }
     static func dismantleNSView(_ view:WindowHook,coordinator:()) { view.stopObserving() }
@@ -49,9 +72,11 @@ struct EditorWindow:NSViewRepresentable {
         private var fitting=false
         private var scheduled=false
         private var appearanceScheduled=false
+        private let nativeToolbar=NSToolbar(identifier:"ClipperWindowHeader")
         private var centerAfterOpen=false
         private var observers:[NSObjectProtocol]=[]
         var onAvailableSize:((CGSize)->Void)?
+        var onHeaderLayout:((WindowHeaderLayout)->Void)?
 
         func update(source:URL?,videoSize:CGSize?) {
             scheduleAppearance()
@@ -79,7 +104,7 @@ struct EditorWindow:NSViewRepresentable {
                 guard self.source != nil, widthChanged || heightChanged else { return }
                 if widthChanged { self.editorWidth=size.width }
                 else {
-                    let videoHeight=window.contentLayoutRect.height-EditorWindowLayout.surroundingSize.height
+                    let videoHeight=window.frame.height-EditorWindowLayout.surroundingSize.height
                     self.editorWidth=EditorWindowLayout.surroundingSize.width+max(1,videoHeight)*(self.aspectRatio ?? 16/9)
                 }
                 self.scheduleFit()
@@ -92,13 +117,23 @@ struct EditorWindow:NSViewRepresentable {
         }
 
         private func applyAppearance(to window:NSWindow) {
+            let title=source?.lastPathComponent ?? "Clipper"
+            if window.title != title { window.title=title }
             if !window.styleMask.contains(.fullSizeContentView) { window.styleMask.insert(.fullSizeContentView) }
+            if window.tabbingMode != .disallowed { window.tabbingMode = .disallowed }
             if window.appearance != nil { window.appearance=nil }
             if !window.titlebarAppearsTransparent { window.titlebarAppearsTransparent=true }
-            if window.toolbar != nil { window.toolbar=nil }
+            if window.titleVisibility != .hidden { window.titleVisibility = .hidden }
+            if window.toolbarStyle != .unified { window.toolbarStyle = .unified }
+            // Let AppKit own the widgets, their glass renderer and shared rollover.
+            // The inspector header is laid out around this standard toolbar row.
+            if window.toolbar !== nativeToolbar {
+                nativeToolbar.allowsUserCustomization=false
+                nativeToolbar.displayMode = .iconOnly
+                window.toolbar=nativeToolbar
+            }
             if window.isOpaque { window.isOpaque=false }
             if window.backgroundColor.alphaComponent != 0 { window.backgroundColor = .clear }
-            if window.titleVisibility != .hidden { window.titleVisibility = .hidden }
             if window.titlebarSeparatorStyle != .none { window.titlebarSeparatorStyle = .none }
         }
 
@@ -108,7 +143,10 @@ struct EditorWindow:NSViewRepresentable {
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.appearanceScheduled=false
-                if let window=self.window { self.applyAppearance(to:window) }
+                if let window=self.window {
+                    self.applyAppearance(to:window)
+                    self.onHeaderLayout?(WindowHeaderLayout(window:window))
+                }
             }
         }
 
@@ -125,20 +163,21 @@ struct EditorWindow:NSViewRepresentable {
             guard let window, let screen=window.screen ?? NSScreen.main else { return }
             fitting=true
             defer { fitting=false }
-            // SwiftUI can reapply its title-bar defaults after attachment or a new
-            // navigation title. Restore our chrome in the deferred layout pass.
-            applyAppearance(to:window)
             if window.styleMask.contains(.fullScreen) {
+                onHeaderLayout?(WindowHeaderLayout(window:window))
                 onAvailableSize?(CGSize(width:CGFloat.infinity,height:CGFloat.infinity))
                 return
             }
+            applyAppearance(to:window)
+            window.contentView?.superview?.layoutSubtreeIfNeeded()
+            onHeaderLayout?(WindowHeaderLayout(window:window))
             let visible=screen.visibleFrame
-            // The SwiftUI editor lives below the title bar, including with full-size content.
-            let titleHeight=window.frame.height-window.contentLayoutRect.height
-            let available=CGSize(width:visible.width,height:max(1,visible.height-titleHeight))
-            // Share the bounds with SwiftUI so its hosting view preserves the cap
-            // when it refreshes the native window's constraints.
-            onAvailableSize?(available)
+            // The hidden-title-bar workspace occupies the entire native window.
+            let available=visible.size
+            // SwiftUI measures its maximum size below the toolbar, even when
+            // ignoresSafeArea draws the workspace across the entire window.
+            let toolbarHeight=max(0,window.frame.height-window.contentLayoutRect.height)
+            onAvailableSize?(CGSize(width:visible.width,height:max(1,visible.height-toolbarHeight)))
             let size:CGSize
             let minimum:CGSize
             if source != nil {
@@ -149,13 +188,15 @@ struct EditorWindow:NSViewRepresentable {
                 size=EditorWindowLayout.starterSize
                 minimum=EditorWindowLayout.starterMinimum
             }
-            window.minSize=CGSize(width:minimum.width,height:minimum.height+titleHeight)
-            window.maxSize=visible.size
+            // Full-size content covers the whole frame. The content constraints
+            // avoid AppKit adding a toolbar-dependent offset to setMaxSize.
+            window.contentMinSize=minimum
+            window.contentMaxSize=visible.size
             var frame=window.frame
             // Keep the top edge and horizontal center stable as videos change shape.
             frame.origin.x += (frame.width-size.width)/2
-            frame.origin.y += frame.height-size.height-titleHeight
-            frame.size=CGSize(width:size.width,height:size.height+titleHeight)
+            frame.origin.y += frame.height-size.height
+            frame.size=size
             if source == nil || centerAfterOpen {
                 frame.origin=CGPoint(x:visible.midX-frame.width/2,y:visible.midY-frame.height/2)
             }

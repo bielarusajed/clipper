@@ -23,7 +23,7 @@ final class EditorWindowTests:XCTestCase {
 
     @MainActor func testAppearanceSurvivesWindowChromeReset() async throws {
         _=NSApplication.shared
-        let window=NSWindow(contentRect:CGRect(x:200,y:200,width:520,height:440),styleMask:[.titled,.closable,.resizable],backing:.buffered,defer:false)
+        let window=NSWindow(contentRect:CGRect(x:200,y:200,width:520,height:440),styleMask:[.titled,.closable,.miniaturizable,.resizable,.fullSizeContentView],backing:.buffered,defer:false)
         window.isReleasedWhenClosed=false
         let hook=EditorWindow.WindowHook()
         window.contentView=hook
@@ -47,17 +47,78 @@ final class EditorWindowTests:XCTestCase {
         }
     }
 
+    @MainActor func testNativeControlsKeepTheirParentsAndSharedRolloverAcrossUpdates() async throws {
+        _=NSApplication.shared
+        let window=NSWindow(contentRect:CGRect(x:200,y:200,width:520,height:440),styleMask:[.titled,.closable,.miniaturizable,.resizable,.fullSizeContentView],backing:.buffered,defer:false)
+        window.isReleasedWhenClosed=false
+        let editor=Editor()
+        let host=NSHostingView(rootView:EditorView(editor:editor,playback:editor.playback))
+        window.contentView=host
+        defer { window.contentView=nil; window.close(); editor.close() }
+        let kinds:[NSWindow.ButtonType]=[.closeButton,.miniaturizeButton,.zoomButton]
+        var toolbar:NSToolbar?
+        for loaded in [false,true,true,false,true,false] {
+            if loaded {
+                editor.source=URL(fileURLWithPath:"/test/video.mp4")
+                editor.playback.details=MediaDetails(duration:5,origin:0,width:1920,height:1080,rotation:0,pixelAspect:1,fps:30,hdr:false,codec:"h264",audioLabels:[],audioStreams:[])
+            } else { editor.close() }
+            try await settle()
+            window.contentView?.layoutSubtreeIfNeeded()
+            let buttons=try kinds.map { try XCTUnwrap(window.standardWindowButton($0)) }
+            let parent=try XCTUnwrap(buttons.first?.superview)
+            XCTAssertTrue(buttons.allSatisfy { $0.superview === parent })
+            XCTAssertTrue(buttons.allSatisfy { !$0.isDescendant(of:host) },"AppKit must retain ownership of all three widgets")
+            XCTAssertEqual(window.toolbarStyle,.unified)
+            XCTAssertEqual(window.tabbingMode,.disallowed)
+            XCTAssertTrue(window.toolbar?.isVisible == true)
+            if let toolbar { XCTAssertTrue(window.toolbar === toolbar) }
+            else { toolbar=try XCTUnwrap(window.toolbar) }
+            XCTAssertEqual(window.title,loaded ? "video.mp4" : "Clipper")
+
+            // The shared native tracking region must cover the whole visible group.
+            // Checking only zoom would miss the original broken close/minimize hover.
+            let points=buttons.map { button -> NSPoint in
+                let rect=button.convert(button.bounds,to:nil)
+                return NSPoint(x:rect.midX,y:rect.midY)
+            }
+            var ancestor:NSView?=parent
+            var sharedRollover=false
+            while let view=ancestor {
+                sharedRollover = sharedRollover || view.trackingAreas.contains { area in
+                    guard area.options.contains(.mouseEnteredAndExited),
+                          area.owner as? NSView === view else { return false }
+                    let rect=view.convert(area.rect,to:nil)
+                    return rect.width<200 && rect.height<80 && points.allSatisfy(rect.contains)
+                }
+                ancestor=view.superview
+            }
+            XCTAssertTrue(sharedRollover,"Native group rollover must follow the actual close, minimize and zoom widgets")
+            if loaded {
+                let header=try XCTUnwrap(descendant(WindowDragRegion.DragView.self,in:host))
+                let filenameRect=header.convert(header.bounds,to:nil)
+                let closeRect=buttons[0].convert(buttons[0].bounds,to:nil)
+                let zoomRect=buttons[2].convert(buttons[2].bounds,to:nil)
+                XCTAssertEqual(filenameRect.midY,closeRect.midY,accuracy:0.5)
+                XCTAssertGreaterThanOrEqual(filenameRect.minX,zoomRect.maxX+12)
+            }
+        }
+    }
+
+    @MainActor func testFileHeaderCanDragAnInactiveWindow() {
+        XCTAssertTrue(WindowDragRegion.DragView().acceptsFirstMouse(for:nil))
+    }
+
     @MainActor func testNativeEditorFitsVideoResizesAndReturnsToStarter() async throws {
         _=NSApplication.shared
         let editor=Editor()
         let host=NSHostingView(rootView:EditorView(editor:editor,playback:editor.playback))
-        let window=NSWindow(contentRect:CGRect(x:200,y:200,width:1180,height:800),styleMask:[.titled,.closable,.resizable],backing:.buffered,defer:false)
+        let window=NSWindow(contentRect:CGRect(x:200,y:200,width:1180,height:800),styleMask:[.titled,.closable,.miniaturizable,.resizable,.fullSizeContentView],backing:.buffered,defer:false)
         window.isReleasedWhenClosed=false
         window.contentView=host
         defer { window.contentView=nil; window.close(); editor.close() }
         try await settle()
-        XCTAssertEqual(window.contentLayoutRect.width,520,accuracy:1)
-        XCTAssertEqual(window.contentLayoutRect.height,440,accuracy:1)
+        XCTAssertEqual(window.frame.width,520,accuracy:1)
+        XCTAssertEqual(window.frame.height,440,accuracy:1)
         let starterScreen=try XCTUnwrap(window.screen).visibleFrame
         XCTAssertEqual(window.frame.midX,starterScreen.midX,accuracy:1)
         XCTAssertEqual(window.frame.midY,starterScreen.midY,accuracy:1)
@@ -71,9 +132,9 @@ final class EditorWindowTests:XCTestCase {
             try await settle()
             host.layoutSubtreeIfNeeded()
             let surface=try XCTUnwrap(descendant(ComparisonSurface.Surface.self,in:host))
-            XCTAssertEqual(surface.bounds.width,window.contentLayoutRect.width-EditorWindowLayout.surroundingSize.width,accuracy:1,"The video must fill the right column")
+            XCTAssertEqual(surface.bounds.width,window.frame.width-EditorWindowLayout.surroundingSize.width,accuracy:1,"The video must fill the right column")
             XCTAssertEqual(surface.bounds.width/surface.bounds.height,size.width/size.height,accuracy:0.002)
-            XCTAssertEqual(window.contentLayoutRect.height-surface.bounds.height,EditorWindowLayout.surroundingSize.height,accuracy:1,"Only the controls and spacing should surround the video")
+            XCTAssertEqual(window.frame.height-surface.bounds.height,EditorWindowLayout.surroundingSize.height,accuracy:1,"Only the controls and spacing should surround the video")
             let visible=try XCTUnwrap(window.screen).visibleFrame
             XCTAssertGreaterThanOrEqual(window.frame.minY,visible.minY-1)
             XCTAssertLessThanOrEqual(window.frame.maxY,visible.maxY+1)
@@ -96,22 +157,22 @@ final class EditorWindowTests:XCTestCase {
         try await settle()
         let surface=try XCTUnwrap(descendant(ComparisonSurface.Surface.self,in:host))
         XCTAssertEqual(window.frame.width,targetWidth,accuracy:1)
-        XCTAssertEqual(window.contentLayoutRect.height-surface.bounds.height,EditorWindowLayout.surroundingSize.height,accuracy:1)
+        XCTAssertEqual(window.frame.height-surface.bounds.height,EditorWindowLayout.surroundingSize.height,accuracy:1)
 
         var shorter=window.frame
         shorter.size.height -= 25
         window.setFrame(shorter,display:false)
         try await settle()
         XCTAssertLessThan(window.frame.width,targetWidth,"Dragging the height should also preserve the video aspect ratio")
-        XCTAssertEqual(window.contentLayoutRect.height-surface.bounds.height,EditorWindowLayout.surroundingSize.height,accuracy:1)
+        XCTAssertEqual(window.frame.height-surface.bounds.height,EditorWindowLayout.surroundingSize.height,accuracy:1)
         let resizedWidth=window.frame.width
 
         editor.playback.details?.width=1080; editor.playback.details?.height=1920
         try await settle()
         editor.close()
         try await settle()
-        XCTAssertEqual(window.contentLayoutRect.width,520,accuracy:1)
-        XCTAssertEqual(window.contentLayoutRect.height,440,accuracy:1)
+        XCTAssertEqual(window.frame.width,520,accuracy:1)
+        XCTAssertEqual(window.frame.height,440,accuracy:1)
         let closingScreen=try XCTUnwrap(window.screen).visibleFrame
         XCTAssertEqual(window.frame.midX,closingScreen.midX,accuracy:1)
         XCTAssertEqual(window.frame.midY,closingScreen.midY,accuracy:1,"Closing a portrait video should center the starter rather than preserve the video's top edge")

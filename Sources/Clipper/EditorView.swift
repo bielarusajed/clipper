@@ -13,29 +13,39 @@ struct EditorView:View {
     @State private var qualityDragging=false
     private enum Field:Hashable { case start, end, width, height }
     @FocusState private var focusedField:Field?
+    @State private var headerLayout=WindowHeaderLayout()
     @State private var availableWindowSize=CGSize(width:CGFloat.infinity,height:CGFloat.infinity)
 
     var body:some View {
-        Group {
-            if editor.source != nil {
-                HStack(spacing:EditorWindowLayout.spacing) {
-                    sidebar.frame(width:EditorWindowLayout.sidebarWidth).modifier(GlassPanel(radius:22))
-                    VStack(spacing:EditorWindowLayout.spacing) {
-                        Viewer(editor:editor,playback:playback).frame(maxWidth:.infinity,maxHeight:.infinity)
-                        timelineDeck.modifier(GlassPanel(radius:20))
-                    }
-                }.padding(EditorWindowLayout.inset)
-            } else { emptyState }
+        ZStack(alignment:.topLeading) {
+            Group {
+                if editor.source != nil {
+                    HStack(spacing:EditorWindowLayout.spacing) {
+                        sidebar.frame(width:EditorWindowLayout.sidebarWidth).modifier(GlassPanel(radius:22))
+                        VStack(spacing:EditorWindowLayout.spacing) {
+                            Viewer(editor:editor,playback:playback).frame(maxWidth:.infinity,maxHeight:.infinity)
+                            timelineDeck.modifier(GlassPanel(radius:20))
+                        }
+                    }.padding(EditorWindowLayout.inset)
+                } else { emptyState }
+            }.frame(maxWidth:.infinity,maxHeight:.infinity)
+            if editor.source == nil, let controls=headerLayout.controls {
+                RoundedRectangle(cornerRadius:15).fill(.ultraThinMaterial)
+                    .frame(width:controls.width+20,height:controls.height+24)
+                    .offset(x:controls.minX-10,y:controls.minY-12).allowsHitTesting(false)
+            }
         }
+        .ignoresSafeArea()
         .frame(maxWidth:availableWindowSize.width,maxHeight:availableWindowSize.height)
         .background(WindowMaterial().ignoresSafeArea().allowsHitTesting(false))
         .foregroundStyle(C1.ink)
         .tint(C1.blue)
-        .background(EditorWindow(source:editor.source,videoSize:windowVideoSize) { size in
+        .background(EditorWindow(source:editor.source,videoSize:windowVideoSize,onAvailableSize:{ size in
             if availableWindowSize != size { availableWindowSize=size }
-        }.frame(width:0,height:0))
+        },onHeaderLayout:{ layout in
+            if headerLayout != layout { headerLayout=layout }
+        }).frame(width:0,height:0))
         .background(WindowPasteHandler(editor:editor).frame(width:0,height:0))
-        .navigationTitle(editor.source?.lastPathComponent ?? "Clipper")
         .overlay {
             if dropping { RoundedRectangle(cornerRadius:10).stroke(C1.blue,lineWidth:3).padding(4).allowsHitTesting(false) }
         }
@@ -102,7 +112,7 @@ struct EditorView:View {
 
     private var sidebar:some View {
         VStack(spacing:0) {
-            sourceHeader.padding(.horizontal,14).padding(.top,16).padding(.bottom,17)
+            sourceHeader.padding(.horizontal,EditorWindowLayout.headerPadding).padding(.bottom,16)
             ScrollView {
                 VStack(spacing:16) {
                     if let details=playback.details {
@@ -134,24 +144,20 @@ struct EditorView:View {
     }
 
     private var sourceHeader:some View {
-        HStack(spacing:9) {
-            Group {
-                if let image=playback.backdrop { Image(nsImage:image).resizable().scaledToFill() }
-                else { Image(systemName:"film").font(.system(size:18)).foregroundStyle(C1.secondary) }
-            }
-            .frame(width:43,height:31).background(C1.canvas).clipShape(RoundedRectangle(cornerRadius:5))
+        HStack(spacing:EditorWindowLayout.headerSpacing) {
+            Color.clear.frame(width:headerLayout.reserve,height:headerLayout.height)
             VStack(alignment:.leading,spacing:4) {
                 Text(editor.source?.lastPathComponent ?? "Video").font(.system(size:11,weight:.semibold)).lineLimit(1).help(editor.source?.lastPathComponent ?? "Video")
                 if let details=playback.details {
                     Text("\(details.codec.uppercased()) · \(Int(details.displaySize.width))×\(Int(details.displaySize.height)) · \(details.fps.formatted(.number.precision(.fractionLength(0...2)))) fps")
                         .font(.system(size:9)).foregroundStyle(C1.secondary).lineLimit(1)
                 } else { Text("Reading video").font(.system(size:10)).foregroundStyle(C1.muted) }
-            }.frame(maxWidth:.infinity,alignment:.leading)
+            }.frame(maxWidth:.infinity,alignment:.leading).background(WindowDragRegion())
             Button { editor.close() } label: { Image(systemName:"xmark").font(.system(size:8,weight:.semibold)).frame(width:19,height:19).background(C1.line,in:Circle()) }
                 .buttonStyle(.plain).foregroundStyle(C1.secondary).disabled(editor.exporting)
                 .help("Close video and return to the empty state").accessibilityLabel("Close video")
         }
-        .padding(8)
+        .frame(height:headerLayout.height)
     }
 
     private func section<Content:View>(_ title:String,detail:String?=nil,@ViewBuilder content:()->Content)->some View {
