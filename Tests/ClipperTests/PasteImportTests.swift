@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import XCTest
 @testable import Clipper
 
@@ -54,15 +55,18 @@ final class PasteImportTests:XCTestCase {
         model.urlChanged() // SwiftUI observes the prefill after the lookup was started.
         XCTAssertEqual(model.urlText,url.absoluteString)
         XCTAssertFalse(model.formatsVisible)
-        XCTAssertFalse(model.showsStatus)
+        XCTAssertTrue(model.busy)
+        XCTAssertFalse(model.showsActivity,"Passive prefetch must leave Download and Choose formats available")
         try await waitUntil { await service.lookupCount == 1 }
         model.showFormats(); model.showFormats()
         XCTAssertTrue(model.formatsVisible)
-        XCTAssertTrue(model.showsStatus)
+        XCTAssertTrue(model.showsActivity,"Opening formats must reveal the existing lookup's status")
+        XCTAssertFalse(model.status.isEmpty)
         assertEqual(await service.lookupCount,1)
         await service.releaseLookup()
         try await waitUntil { !model.busy }
         XCTAssertNotNil(model.media)
+        XCTAssertFalse(model.showsActivity)
         model.showFormats()
         assertEqual(await service.lookupCount,1)
         assertEqual(await service.downloadCount,0)
@@ -77,7 +81,8 @@ final class PasteImportTests:XCTestCase {
         model.download { _ in opened += 1; XCTAssertFalse(model.busy) }
         model.download { _ in XCTFail("Repeated click must not queue a second download") }
         XCTAssertTrue(model.downloadRequested)
-        XCTAssertTrue(model.showsStatus)
+        XCTAssertTrue(model.showsActivity,"Requesting Download must reveal status without duplicating the lookup")
+        XCTAssertFalse(model.status.isEmpty)
         model.showFormats()
         assertEqual(await service.lookupCount,1)
         assertEqual(await service.downloadCount,0)
@@ -146,6 +151,89 @@ final class PasteImportTests:XCTestCase {
         XCTAssertEqual(actual,expected,file:file,line:line)
     }
 
+    @MainActor func testClosingDuringDownloadCancelsAndNeverOpensTheResult() async throws {
+        let service=ImportServiceSpy()
+        await service.releaseLookup()
+        let model=URLImport(service:service)
+        model.begin(url:URL(string:"https://example.com/one")!)
+        model.download { _ in XCTFail("Closing the import window must not open the result") }
+        try await waitUntil { await service.downloadCount == 1 }
+        model.endPresentation()
+        XCTAssertFalse(model.busy)
+        XCTAssertFalse(model.downloadRequested)
+        try await waitUntil { await service.cancelledDownloads == 1 }
+        XCTAssertNil(model.media)
+    }
+
+    @MainActor func testNativeImportWindowTitleCloseAndCommandReturnDuringLookup() async throws {
+        let service=ImportServiceSpy()
+        let model=URLImport(service:service)
+        model.begin(url:URL(string:"https://example.com/one")!)
+        try await waitUntil { await service.lookupCount == 1 }
+        let parent=NSWindow(contentRect:NSRect(x:0,y:0,width:1100,height:800),styleMask:[.titled],backing:.buffered,defer:false)
+        var closed=false
+        let controller=URLImportWindowController(importer:model,parent:parent,open:{ _ in XCTFail("No download was requested") },onClose:{ closed=true })
+        let window=try XCTUnwrap(controller.window)
+        XCTAssertEqual(window.title,"Import URL")
+        XCTAssertTrue(window.styleMask.contains(.titled))
+        XCTAssertNotNil(window.standardWindowButton(.closeButton))
+        window.contentView?.layoutSubtreeIfNeeded()
+        try await Task.sleep(for:.milliseconds(50))
+        let compact=window.frame
+        let event=try XCTUnwrap(NSEvent.keyEvent(with:.keyDown,location:.zero,modifierFlags:.command,timestamp:0,
+            windowNumber:window.windowNumber,context:nil,characters:"\r",charactersIgnoringModifiers:"\r",isARepeat:false,keyCode:36))
+        XCTAssertTrue(window.performKeyEquivalent(with:event))
+        XCTAssertTrue(model.formatsVisible)
+        try await waitUntil { window.frame.height > compact.height+100 }
+        XCTAssertEqual(window.frame.width,compact.width,accuracy:1)
+        XCTAssertEqual(window.frame.maxY,compact.maxY,accuracy:1,"The URL row must not move when formats are revealed")
+        assertEqual(await service.lookupCount,1)
+        window.performClose(nil)
+        XCTAssertTrue(closed)
+        XCTAssertFalse(model.busy)
+        try await waitUntil { await service.cancelledLookups == 1 }
+    }
+
+    @MainActor func testEditorPresentsAndReopensTheNativeImportWindow() async throws {
+        _=NSApplication.shared
+        let editor=Editor()
+        let host=NSHostingView(rootView:EditorView(editor:editor,playback:editor.playback))
+        let parent=NSWindow(contentRect:NSRect(x:100,y:100,width:520,height:440),styleMask:[.titled,.closable],backing:.buffered,defer:false)
+        parent.isReleasedWhenClosed=false; parent.contentView=host
+        defer { parent.contentView=nil; parent.close(); editor.prepareToQuit() }
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(for:.milliseconds(100))
+        for _ in 0..<2 {
+            editor.showURLImporter()
+            try await waitUntil { NSApp.windows.contains { $0.title == "Import URL" && $0.isVisible } }
+            let window=try XCTUnwrap(NSApp.windows.first { $0.title == "Import URL" && $0.isVisible })
+            XCTAssertEqual(window.frame.width,URLImportLayout.width,accuracy:1)
+            window.performClose(nil)
+            try await waitUntil { !editor.importPresented }
+        }
+    }
+
+    @MainActor func testNativeReturnDownloadsTheSelectedFormats() async throws {
+        let service=ImportServiceSpy()
+        await service.releaseLookup(); await service.releaseDownload()
+        let model=URLImport(service:service)
+        model.begin(url:URL(string:"https://example.com/one")!)
+        try await waitUntil { !model.busy }
+        model.showFormats(); model.selectVideo("137"); model.audio="none"
+        let parent=NSWindow(contentRect:NSRect(x:0,y:0,width:1100,height:800),styleMask:[.titled],backing:.buffered,defer:false)
+        parent.isReleasedWhenClosed=false
+        var opened=false
+        let controller=URLImportWindowController(importer:model,parent:parent,open:{ _ in opened=true },onClose:{})
+        defer { controller.close(); parent.close() }
+        let window=try XCTUnwrap(controller.window)
+        let event=try XCTUnwrap(NSEvent.keyEvent(with:.keyDown,location:.zero,modifierFlags:[],timestamp:0,
+            windowNumber:window.windowNumber,context:nil,characters:"\r",charactersIgnoringModifiers:"\r",isARepeat:false,keyCode:36))
+        XCTAssertTrue(window.performKeyEquivalent(with:event))
+        try await waitUntil { opened }
+        assertEqual(await service.selectors,["137"])
+        assertEqual(await service.excludedAudio,[true])
+    }
+
     @MainActor private func waitUntil(_ condition:() async -> Bool) async throws {
         let deadline=Date().addingTimeInterval(3)
         while !(await condition()) {
@@ -161,6 +249,7 @@ private actor ImportServiceSpy:URLImportServicing {
     private(set) var lookupCount=0
     private(set) var downloadCount=0
     private(set) var cancelledLookups=0
+    private(set) var cancelledDownloads=0
     private(set) var selectors=[String]()
     private(set) var excludedAudio=[Bool]()
     private(set) var downloadURLs=[URL]()
@@ -183,8 +272,8 @@ private actor ImportServiceSpy:URLImportServicing {
     func download(url:URL,media:URLMedia,selector:String,excludeAudio:Bool,tools:ImportTools,
                   progress:@escaping @Sendable(ImportProgress)->Void) async throws -> TemporaryImport {
         downloadCount += 1; selectors.append(selector); excludedAudio.append(excludeAudio); downloadURLs.append(url)
-        while !downloadReleased { try await Task.sleep(for:.milliseconds(10)) }
-        try Task.checkCancellation()
+        do { while !downloadReleased { try await Task.sleep(for:.milliseconds(10)) }; try Task.checkCancellation() }
+        catch { cancelledDownloads += 1; throw error }
         let directory=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString,isDirectory:true)
         try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true)
         let file=directory.appendingPathComponent("Example.mp4")

@@ -44,9 +44,9 @@ struct URLImportService:URLImportServicing {
     init(service:any URLImportServicing=URLImportService()) { self.service=service }
     var includesAudio:Bool { media?.videos.first(where:{ $0.id == video })?.hasAudio == true }
     var excludesAudio:Bool { audio == "none" }
-    var showsStatus:Bool { busy && (formatsVisible || downloadRequested) }
+    var showsActivity:Bool { busy && (formatsVisible || downloadRequested || cancelling) }
 
-    /// New presentation. Paste can start looking up before SwiftUI mounts the sheet.
+    /// New presentation. Paste can start looking up before SwiftUI mounts the window.
     func begin(url:URL?=nil) {
         resetLookup()
         if let url { urlText=url.absoluteString; prefetch() }
@@ -64,11 +64,6 @@ struct URLImportService:URLImportServicing {
         guard requestURL != nil else { error=nil; return }
         if let url=try? URLMedia.parseURL(urlText), url == requestURL { return }
         resetLookup()
-    }
-
-    func useDefaultFormats() {
-        guard !downloadRequested else { return }
-        formatsVisible=false; video="best"; audio="best"
     }
 
     func selectVideo(_ id:String) {
@@ -159,7 +154,8 @@ struct URLImportService:URLImportServicing {
         status="Cancelling…"; cancelling=true; pendingDownload=nil; task?.cancel()
     }
     func endPresentation() {
-        if !downloadRequested { resetLookup() }
+        downloadRequested=false
+        resetLookup()
     }
     func cancelAndWait() async { let current=task; cancel(); await current?.value }
 }

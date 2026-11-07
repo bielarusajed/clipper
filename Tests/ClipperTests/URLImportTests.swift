@@ -48,7 +48,7 @@ final class URLImportTests:XCTestCase {
         model.selectVideo("137")
         model.audio="none"
         XCTAssertEqual(model.video,"137")
-        model.useDefaultFormats()
+        model.begin()
         XCTAssertEqual(model.video,"best"); XCTAssertEqual(model.audio,"best")
         XCTAssertFalse(model.formatsVisible)
     }

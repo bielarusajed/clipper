@@ -1,9 +1,18 @@
 import SwiftUI
 
+enum URLImportLayout {
+    static let width:CGFloat=760
+    static let buttonWidth:CGFloat=200
+    static let tableWidth:CGFloat=940
+    static let tableHeight:CGFloat=330
+    static let compactHeight:CGFloat=72
+    static let expandedHeight:CGFloat=compactHeight+18+tableHeight+32
+}
+
 struct URLImportView:View {
     @ObservedObject var importer:URLImport
     let open:(TemporaryImport)->Void
-    @Environment(\.dismiss) private var dismiss
+    let close:()->Void
     @FocusState private var urlFocused:Bool
 
     private var canDownload:Bool {
@@ -12,7 +21,6 @@ struct URLImportView:View {
 
     var body:some View {
         VStack(alignment:.leading,spacing:16) {
-            Text("Import URL").font(.system(size:16,weight:.semibold))
             HStack(spacing:10) {
                 TextField("Video URL",text:$importer.urlText)
                     .textFieldStyle(.roundedBorder).controlSize(.large)
@@ -20,23 +28,18 @@ struct URLImportView:View {
                     .accessibilityLabel("Video URL").disabled(importer.downloadRequested)
                 downloadButton
             }
-            if importer.formatsVisible, let media=importer.media {
+            if importer.formatsVisible {
                 HStack(spacing:12) {
-                    Text(media.title).font(.system(size:12,weight:.medium)).lineLimit(1).help(media.title)
+                    Text(importer.media?.title ?? "Formats").font(.system(size:12,weight:.medium)).lineLimit(1)
+                        .help(importer.media?.title ?? "")
                     Spacer(minLength:0)
-                    if let duration=media.duration, duration.isFinite, duration > 0 {
+                    if let duration=importer.media?.duration, duration.isFinite, duration > 0 {
                         Text(TimeText.format(duration)).font(.system(size:11).monospacedDigit()).foregroundStyle(.secondary)
                     }
-                }
-                formatTable(media)
-            }
-            if importer.showsStatus {
-                HStack(spacing:10) {
-                    ProgressView().controlSize(.small)
-                    Text(importer.status).font(.system(size:11)).foregroundStyle(.secondary).lineLimit(2)
-                    Spacer(minLength:0)
-                    if let progress=importer.progress { ProgressView(value:progress).frame(width:110) }
-                }.accessibilityElement(children:.combine)
+                }.frame(height:18)
+                ScrollView(.horizontal) {
+                    formatTable(importer.media).frame(width:URLImportLayout.tableWidth)
+                }.frame(height:URLImportLayout.tableHeight).scrollIndicators(.visible)
             }
             if let error=importer.error {
                 ScrollView {
@@ -44,47 +47,58 @@ struct URLImportView:View {
                         .textSelection(.enabled).frame(maxWidth:.infinity,alignment:.leading)
                 }.frame(maxHeight:90)
             }
-            HStack {
-                Button(importer.downloadRequested ? "Cancel Download" : "Cancel",role:.cancel) {
-                    if importer.downloadRequested { importer.cancel() }
-                    else { importer.endPresentation(); dismiss() }
-                }.keyboardShortcut(.cancelAction)
-                Spacer()
-                if importer.formatsVisible && !importer.downloadRequested {
-                    Button("Use default formats") { importer.useDefaultFormats() }
-                        .buttonStyle(.plain).font(.system(size:11)).foregroundStyle(C1.blue)
-                }
-            }
+
         }
-        .padding(20).frame(width:importer.formatsVisible ? 980 : 640)
+        .padding(20).frame(width:URLImportLayout.width)
         .fixedSize(horizontal:false,vertical:true)
-        .interactiveDismissDisabled(importer.downloadRequested)
+        .onExitCommand(perform:close)
         .onAppear { urlFocused=true }
-        .onDisappear { importer.endPresentation() }
         .onChange(of:importer.urlText) { _,_ in importer.urlChanged() }
+    }
+
+    private var buttonLabel:String {
+        if importer.cancelling { return "Cancelling…" }
+        if importer.showsActivity && !importer.downloadRequested { return "Loading formats…" }
+        if importer.downloadRequested {
+            if let progress=importer.progress { return "Downloading \(Int(progress*100))%" }
+            return importer.media == nil ? "Loading formats…" : "Downloading…"
+        }
+        return "Download"
     }
 
     private var downloadButton:some View {
         HStack(spacing:0) {
-            Button("Download") { importer.download(open:open) }
-                .padding(.horizontal,14).frame(height:32).contentShape(Rectangle())
-                .keyboardShortcut(.defaultAction)
-                .disabled(!canDownload)
+            Button { importer.download(open:open) } label: {
+                HStack(spacing:7) {
+                    if importer.showsActivity { ProgressView().controlSize(.mini).tint(.white) }
+                    Text(buttonLabel).lineLimit(1)
+                }
+                .frame(width:URLImportLayout.buttonWidth-33,height:32).contentShape(Rectangle())
+            }
+            .keyboardShortcut(.defaultAction)
+            .disabled(!canDownload)
+            .help(importer.showsActivity ? importer.status : "Download the selected video and audio formats")
             Color.white.opacity(0.25).frame(width:1,height:20)
-            Button { importer.showFormats() } label: {
-                Image(systemName:"slider.horizontal.3").frame(width:32,height:32).contentShape(Rectangle())
-            }.keyboardShortcut(.return,modifiers:.command)
-                .help("Choose video and audio formats (⌘↩)").accessibilityLabel("Choose formats")
-                .disabled(importer.cancelling || importer.urlText.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty)
+            if importer.showsActivity {
+                Button { importer.cancel() } label: {
+                    Image(systemName:"xmark").frame(width:32,height:32).contentShape(Rectangle())
+                }.help("Cancel the current operation").accessibilityLabel("Cancel operation").disabled(importer.cancelling)
+            } else {
+                Button { importer.showFormats() } label: {
+                    Image(systemName:"slider.horizontal.3").frame(width:32,height:32).contentShape(Rectangle())
+                }.help("Choose video and audio formats (⌘↩)").accessibilityLabel("Choose formats")
+                    .disabled(importer.urlText.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty)
+            }
         }
+        .frame(width:URLImportLayout.buttonWidth)
         .buttonStyle(.plain).font(.system(size:12,weight:.medium)).foregroundStyle(.white)
         .background(LinearGradient(colors:[Color(red:0.16,green:0.53,blue:0.98),C1.blue],startPoint:.top,endPoint:.bottom),in:RoundedRectangle(cornerRadius:8))
         .overlay(RoundedRectangle(cornerRadius:8).stroke(C1.blue.opacity(0.4),lineWidth:1).allowsHitTesting(false))
-        .opacity(importer.cancelling || importer.urlText.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty ? 0.45 : 1)
+        .opacity(importer.urlText.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty ? 0.45 : 1)
     }
 
-    private func formatTable(_ media:URLMedia)->some View {
-        Table(ImportFormatRow.rows(media)) {
+    private func formatTable(_ media:URLMedia?)->some View {
+        Table(media.map(ImportFormatRow.rows) ?? []) {
             TableColumn("Video") { row in
                 if row.kind == .best || row.format?.hasVideo == true {
                     radio(selected:importer.video == row.id,label:"Video \(row.accessibleName)") { importer.selectVideo(row.id) }
@@ -109,7 +123,7 @@ struct URLImportView:View {
             TableColumn("Details") { row in Text(row.format?.detailsText ?? "") }.width(min:95,ideal:130,max:230)
         }
         .font(.system(size:11)).tableStyle(.inset(alternatesRowBackgrounds:true))
-        .frame(height:330)
+        .frame(height:URLImportLayout.tableHeight)
         .disabled(importer.downloadRequested)
     }
 

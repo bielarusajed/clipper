@@ -47,12 +47,7 @@ struct EditorView:View {
             if editor.lastBoundaryIsStart { startText=TimeText.format(editor.inTime) }
             else { endText=TimeText.format(editor.end?.time ?? 0) }
         }
-        .sheet(isPresented:$editor.importPresented) {
-            URLImportView(importer:editor.urlImporter) { download in
-                editor.importPresented=false
-                editor.open(download.file,temporary:download)
-            }
-        }
+        .background(URLImportPresenter(editor:editor).frame(width:0,height:0))
         .alert("Clipper",isPresented:Binding(get:{editor.error != nil || playback.error != nil},set:{if !$0 {editor.error=nil;playback.error=nil}})) {
             Button("OK") { editor.error=nil; playback.error=nil }
         } message: { Text(editor.error ?? playback.error ?? "") }
