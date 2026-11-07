@@ -31,6 +31,9 @@ import AppKit
                 Button("Set End Here") { editor.markEnd() }.disabled(editor.exporting || editor.loading)
             }
             CommandGroup(after:.toolbar) {
+                Toggle("Show Audio Waveform",isOn:$editor.waveformVisible)
+                    .disabled(editor.source == nil || (editor.details?.audioLabels.isEmpty ?? true))
+                Divider()
                 Button("Zoom Timeline In") { editor.zoomTimeline(by:0.5) }.keyboardShortcut("=").disabled(editor.source == nil)
                 Button("Fit Timeline") { editor.timelineZoom=0 }.keyboardShortcut("0").disabled(editor.source == nil)
                 Button("Zoom Timeline Out") { editor.zoomTimeline(by:-0.5) }.keyboardShortcut("-").disabled(editor.source == nil)

@@ -2,9 +2,13 @@ import AppKit
 import AVFoundation
 import SwiftUI
 import UniformTypeIdentifiers
+import Combine
 
 @MainActor final class Editor: ObservableObject {
     let playback=Playback()
+    let waveform=AudioWaveform()
+    @Published var waveformVisible=false
+    private var waveformObservers=Set<AnyCancellable>()
     let urlImporter=URLImport()
     @Published var importPresented=false
     private var temporarySource:TemporaryImport?
@@ -62,6 +66,25 @@ import UniformTypeIdentifiers
     init() {
         outputPlayer.actionAtItemEnd = .pause
         outputPlayer.automaticallyWaitsToMinimizeStalling=false
+        let changes:[AnyPublisher<Void,Never>]=[
+            $waveformVisible.map { _ in () }.eraseToAnyPublisher(),
+            $loading.map { _ in () }.eraseToAnyPublisher(),
+            $exporting.map { _ in () }.eraseToAnyPublisher(),
+            $previewPlaying.map { _ in () }.eraseToAnyPublisher(),
+            $comparisonPreparing.map { _ in () }.eraseToAnyPublisher(),
+            playback.$playing.map { _ in () }.eraseToAnyPublisher(),
+            playback.$starting.map { _ in () }.eraseToAnyPublisher(),
+            playback.$seeking.map { _ in () }.eraseToAnyPublisher(),
+            playback.$details.map { _ in () }.eraseToAnyPublisher()
+        ]
+        Publishers.MergeMany(changes).receive(on:DispatchQueue.main).sink { [weak self] in self?.refreshWaveform() }.store(in:&waveformObservers)
+    }
+    private func refreshWaveform() {
+        let stream=details.flatMap { $0.audioStreams.indices.contains(edit.audioTrack) ? $0.audioStreams[edit.audioTrack] : nil } ?? -1
+        waveform.update(url:source,stream:stream,origin:details?.origin ?? 0,duration:details?.duration ?? 0,
+                        enabled:waveformVisible && !loading && source != nil,
+                        busy:loading || exporting || playback.playing || playback.starting || playback.seeking || previewPlaying || comparisonPreparing,
+                        lease:temporarySource)
     }
     deinit {
         if let previewObserver { outputPlayer.removeTimeObserver(previewObserver) }
@@ -92,6 +115,7 @@ import UniformTypeIdentifiers
         guard !urlImporter.busy else { error="Finish or cancel the URL import before opening another video."; return }
         guard !exporting else { error="Finish or cancel the current export before opening another video."; return }
         let previous=temporarySource
+        waveform.resetSource()
         temporarySource=temporary
         defer { if let previous { playback.queue.async { withExtendedLifetime(previous) {} } } }
         cancelNudges(); timelineZoom=0
@@ -119,6 +143,7 @@ import UniformTypeIdentifiers
     func close() {
         guard !exporting, !urlImporter.busy else { return }
         cancelNudges()
+        waveform.resetSource()
         loadingID=UUID(); loading=false
         invalidatePreview(); playback.close()
         let previous=temporarySource; temporarySource=nil
@@ -128,6 +153,7 @@ import UniformTypeIdentifiers
     func prepareToQuit() {
         let download=temporarySource
         close()
+        waveform.cancelAndWait()
         download?.dispose()
     }
     func nudgeBoundary(start:Bool,direction:Int) {
@@ -207,11 +233,13 @@ import UniformTypeIdentifiers
         }
         if details?.hdr == true && !edit.convertToSDR { edit.codec = .hevc }
         if edit.audioTrack != previous.audioTrack, let source {
+            waveform.cancel()
             let t=playback.position
             let duration=details?.duration
             playback.open(source,audioTrack:edit.audioTrack,at:t,completion:{ [weak self] in if let duration { self?.playback.details?.duration=duration } })
         }
         playback.setMuted(edit.muted)
+        refreshWaveform()
     }
     func invalidatePreview() {
         revision=UUID(); stopPreviewTracking(); previewStatus=nil
