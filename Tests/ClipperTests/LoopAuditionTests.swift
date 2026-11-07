@@ -15,7 +15,8 @@ final class LoopAuditionTests:XCTestCase {
     }
     @MainActor private func open(_ name:String="cfr.mp4")->Editor {
         _=NSApplication.shared
-        let editor=Editor(); editor.open(fixture(name)); return editor
+        let defaults=UserDefaults(suiteName:"Clipper.LoopTests."+UUID().uuidString)!
+        let editor=Editor(preferences:ExportPreferences(defaults:defaults)); editor.open(fixture(name)); return editor
     }
     @MainActor private func select(_ editor:Editor,start:Double,end:Double) async throws {
         try await wait { !editor.loading && !editor.playback.seeking }
@@ -218,6 +219,67 @@ final class LoopAuditionTests:XCTestCase {
             try await wait { !editor.loading && !editor.playback.seeking }
         }
     }
+    @MainActor func testSameFrameSeekAfterPauseKeepsWarmDecoderRunning() async throws {
+        let video=VideoSamples()
+        let player=Playback(video:video)
+        defer { player.close() }
+        var opened=false
+        player.open(fixture("cfr.mp4"),at:1,completion:{ opened=true })
+        try await wait { opened }
+        player.playRange(until:4,loopStart:1,looping:true)
+        try await wait { player.clock.rate>0 }
+        try await Task.sleep(nanoseconds:160_000_000)
+        player.pause()
+        let paused=try XCTUnwrap(player.frame)
+        player.seek(paused.time+0.000002)
+        XCTAssertFalse(player.seeking,"Same-frame seeks should retain warm queued media")
+        player.playRange(until:4,loopStart:1,looping:true)
+        try await wait { player.clock.rate>0 }
+        try await Task.sleep(nanoseconds:900_000_000)
+        XCTAssertGreaterThan(player.position,paused.time+0.7)
+        XCTAssertGreaterThan(video.timestamps.max() ?? 0,paused.time+0.7,"Fresh frames must be enqueued after the existing warm queue drains")
+        XCTAssertTrue(player.playing)
+    }
+    @MainActor func testUndoTrimWhileLoopingStopsAndRestoresSelection() async throws {
+        let editor=open(); defer { editor.close() }
+        try await select(editor,start:1,end:1.49)
+        let end=editor.end
+        editor.markEnd(1.7); try await wait { !editor.playback.seeking }
+        editor.toggleLoop(); editor.togglePlayback()
+        try await wait { editor.playback.clock.rate>0 }
+        editor.undoEdit()
+        try await wait { !editor.playback.seeking }
+        XCTAssertEqual(editor.end,end)
+        XCTAssertFalse(editor.isPlaying); XCTAssertFalse(editor.auditioning)
+        editor.redoEdit(); try await wait { !editor.playback.seeking }
+        XCTAssertGreaterThan(editor.outTime,end!.end)
+        editor.togglePlayback(); try await wait { editor.playback.clock.rate>0 }
+    }
+    @MainActor func testSubtitleCueReturnsAfterContinuousLoopWraps() async throws {
+        let editor=open(); defer { editor.close() }
+        try await select(editor,start:1,end:1.49)
+        let directory=try SubtitleDirectory()
+        let text=SubtitleComposer.compose("""
+        [Script Info]
+        ScriptType: v4.00+
+        [Events]
+        Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+        Dialogue: 0,0:00:01.00,0:00:01.50,Default,,0,0,0,,Loop cue
+        """,style:SubtitleStyle(),width:160,height:90)
+        let asset=try RenderSubtitles(directory:directory,text:text,zero:0,preserve:false)
+        let surface=ComparisonSurface.Surface(source:editor.playback.video,player:editor.outputPlayer)
+        defer { ComparisonSurface.dismantleNSView(surface,coordinator:()) }
+        surface.details=editor.details; surface.playback=editor.playback
+        surface.subtitleAsset=asset; surface.frame=CGRect(x:0,y:0,width:320,height:180)
+        surface.layoutSubtreeIfNeeded()
+        editor.toggleLoop(); editor.togglePlayback()
+        try await wait { editor.playback.clock.rate>0 }
+        try await Task.sleep(nanoseconds:1_200_000_000)
+        XCTAssertGreaterThan(editor.playback.clock.currentTime().seconds,2)
+        XCTAssertGreaterThanOrEqual(editor.playback.currentSourceTime,1)
+        XCTAssertLessThan(editor.playback.currentSourceTime,1.5)
+        XCTAssertNotNil(surface.subtitleLayer.contents,"The cue must render from source time on the third pass")
+    }
     @MainActor func testShortAndVFRSelectionsLoopWithoutChangingMarkers() async throws {
         for name in ["cfr.mp4","vfr.mkv"] {
             let editor=open(name); defer { editor.close() }
@@ -292,8 +354,7 @@ final class LoopAuditionTests:XCTestCase {
         }
         editor.toggleLoop(); editor.togglePlayback()
         try await wait { wraps>=3 && editor.playback.clock.rate>0 }
-        let old=editor.edit
-        editor.edit.muted.toggle(); editor.settingsChanged(old)
+        editor.updateSettings("Mute") { $0.muted.toggle() }
         XCTAssertTrue(editor.isPlaying,"Changing mute/crop/codec keeps Original transport running")
         try await wait { wraps>=5 && editor.playback.clock.rate>0 }
         editor.togglePlayback()

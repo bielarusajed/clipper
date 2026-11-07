@@ -13,6 +13,7 @@ import AppKit
         .defaultSize(width:EditorWindowLayout.starterSize.width,height:EditorWindowLayout.starterSize.height)
         .windowStyle(.titleBar)
         .commands {
+            EditHistoryCommands(editor:editor)
             CommandGroup(replacing:.newItem) {
                 Button("Open Video…") { editor.openPanel() }.keyboardShortcut("o").disabled(editor.exporting)
                 Button("Import URL…") { editor.showURLImporter() }.keyboardShortcut("o",modifiers:[.command,.shift]).disabled(editor.exporting)
@@ -35,6 +36,9 @@ import AppKit
                 Button("Set End Here") { editor.markEnd() }.disabled(editor.exporting || editor.loading)
             }
             CommandGroup(after:.toolbar) {
+                Toggle("Show Audio Waveform",isOn:$editor.waveformVisible)
+                    .disabled(editor.source == nil || (editor.details?.audioLabels.isEmpty ?? true))
+                Divider()
                 Button("Zoom Timeline In") { editor.zoomTimeline(by:0.5) }.keyboardShortcut("=").disabled(editor.source == nil)
                 Button("Fit Timeline") { editor.timelineZoom=0 }.keyboardShortcut("0").disabled(editor.source == nil)
                 Button("Zoom Timeline Out") { editor.zoomTimeline(by:-0.5) }.keyboardShortcut("-").disabled(editor.source == nil)
@@ -47,6 +51,7 @@ import AppKit
     var pending: [URL]=[]
     private var keyMonitor: Any?
     func applicationDidFinishLaunching(_ notification: Notification) {
+        ImportWorkspace.removeAbandoned()
         NSApp.setActivationPolicy(.regular); NSApp.activate(ignoringOtherApps:true)
         keyMonitor=NSEvent.addLocalMonitorForEvents(matching:.keyDown) { [weak self] event in
             if let editor=self?.editor, !editor.importPresented, editor.source != nil, !(NSApp.keyWindow is NSPanel),
@@ -79,19 +84,49 @@ import AppKit
     func deliverPending() { if let url=pending.first { pending=[]; editor?.open(url) } }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender:NSApplication) -> Bool { true }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        if editor?.urlImporter.busy == true {
-            let alert=NSAlert(); alert.messageText="Cancel the URL import and quit?"
-            alert.addButton(withTitle:"Keep Importing"); alert.addButton(withTitle:"Cancel and Quit")
+        if let editor, editor.exporting {
+            let alert=NSAlert(); alert.messageText="Cancel the export and quit?"; alert.addButton(withTitle:"Keep Exporting"); alert.addButton(withTitle:"Cancel and Quit")
             if alert.runModal() == .alertFirstButtonReturn { return .terminateCancel }
+            editor.cancel()
+            Task { await editor.urlImporter.cancelAndWait(); editor.cancelAndQuit() }
+            return .terminateLater
+        }
+        if editor?.urlImporter.hasPendingWork == true {
+            if editor?.urlImporter.busy == true {
+                let alert=NSAlert(); alert.messageText="Cancel the URL import and quit?"
+                alert.addButton(withTitle:"Keep Importing"); alert.addButton(withTitle:"Cancel and Quit")
+                if alert.runModal() == .alertFirstButtonReturn { return .terminateCancel }
+            }
             Task { await editor?.urlImporter.cancelAndWait(); editor?.prepareToQuit(); NSApp.reply(toApplicationShouldTerminate:true) }
             return .terminateLater
         }
-        if editor?.exporting == true {
-            let alert=NSAlert(); alert.messageText="Cancel the export and quit?"; alert.addButton(withTitle:"Keep Exporting"); alert.addButton(withTitle:"Cancel and Quit")
-            if alert.runModal() == .alertFirstButtonReturn { return .terminateCancel }
-            editor?.cancelAndQuit()
-            return .terminateLater
-        }
         editor?.prepareToQuit(); return .terminateNow
+    }
+}
+
+/// Menu shortcuts route text editing through AppKit and complete edits through our manager.
+struct EditHistoryCommands:Commands {
+    @ObservedObject var editor:Editor
+    func usesTextUndo(in window:NSWindow?)->Bool { window?.firstResponder is NSText || window is NSPanel }
+    func isEnabled(redo:Bool,in window:NSWindow?)->Bool {
+        usesTextUndo(in:window) || (redo ? editor.canRedo : editor.canUndo)
+    }
+    private var nativeText:Bool { usesTextUndo(in:NSApp.keyWindow) }
+    var body:some Commands {
+        CommandGroup(replacing:.undoRedo) {
+            Button(nativeText ? "Undo" : editor.editUndoManager.undoMenuItemTitle) { perform(redo:false) }
+                .keyboardShortcut("z")
+                .disabled(!isEnabled(redo:false,in:NSApp.keyWindow))
+            Button(nativeText ? "Redo" : editor.editUndoManager.redoMenuItemTitle) { perform(redo:true) }
+                .keyboardShortcut("z",modifiers:[.command,.shift])
+                .disabled(!isEnabled(redo:true,in:NSApp.keyWindow))
+        }
+    }
+    func perform(redo:Bool,in window:NSWindow?=NSApp.keyWindow) {
+        if usesTextUndo(in:window) {
+            let action=NSSelectorFromString(redo ? "redo:" : "undo:")
+            NSApp.sendAction(action,to:window,from:nil)
+        } else if redo { editor.redoEdit() }
+        else { editor.undoEdit() }
     }
 }

@@ -137,7 +137,7 @@ final class Playback: ObservableObject {
             let info=clip_info(m)
             var codec=info.codec
             let codecText=withUnsafePointer(to:&codec) { $0.withMemoryRebound(to:CChar.self,capacity:64) { String(cString:$0) } }
-            let details=MediaDetails(duration:info.duration,origin:info.origin,width:Int(info.width),height:Int(info.height),rotation:info.rotation,pixelAspect:info.pixelAspect,fps:info.fps,hdr:info.hdr != 0,codec:codecText,audioLabels:(0..<info.audioCount).map { String(cString:clip_audio_label(m,$0)) },audioStreams:(0..<info.audioCount).map { Int(clip_audio_stream(m,$0)) })
+            let details=MediaDetails(duration:info.duration,origin:info.origin,width:Int(info.width),height:Int(info.height),rotation:info.rotation,pixelAspect:info.pixelAspect,fps:info.fps,hdr:info.hdr != 0,codec:codecText,audioLabels:(0..<info.audioCount).map { String(cString:clip_audio_label(m,$0)) },audioStreams:(0..<info.audioCount).map { Int(clip_audio_stream(m,$0)) },colorSpace:Int(info.colorSpace))
             DispatchQueue.main.async {
                 guard self.isCurrent(token) else { return }
                 self.details=details
@@ -146,7 +146,11 @@ final class Playback: ObservableObject {
         }
     }
     func seek(_ requested: Double, onFailure: (() -> Void)? = nil, completion: (() -> Void)? = nil) {
-        cancelRun(); _=nextGeneration(); loopPreparation.cancel()
+        cancelRun()
+        let sameFrame=warmTransport && !playing && !seeking && frame.map { requested >= $0.time-0.0000001 && requested < $0.end-0.0000001 } == true
+        // A no-op seek keeps the queued decoder generation valid for warm resume.
+        if !sameFrame { _=nextGeneration() }
+        loopPreparation.cancel()
         seekFrame(requested,onFailure:onFailure,completion:completion)
     }
     private func seekFrame(_ requested:Double,skipBackdrop:Bool=false,forcePresent:Bool=false,onFailure:(() -> Void)?=nil,completion:(() -> Void)?=nil) {
@@ -282,6 +286,7 @@ final class Playback: ObservableObject {
         if !seeking { runNextAction() }
     }
     /// The render clock stays monotonic across passes. Only source/UI time wraps.
+    var currentSourceTime:Double { sourceTime(for:clock.currentTime().seconds) }
     private func sourceTime(for timeline:Double)->Double {
         requestLock.withLock {
             if let committedEnd, timeline>=committedEnd,
