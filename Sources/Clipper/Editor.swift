@@ -226,7 +226,7 @@ import UniformTypeIdentifiers
         guard !exporting else { return }
         // A repeated URL can contain new text, so URL equality cannot invalidate this sample.
         invalidatePreview()
-        subtitles.external=url; subtitles.sourceKind = .external; subtitles.prepare()
+        subtitles.importExternal(url)
     }
     func invalidatePreview() {
         revision=UUID(); stopPreviewTracking(); previewStatus=nil

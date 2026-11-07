@@ -165,7 +165,9 @@ final class SubtitleProcess: @unchecked Sendable {
     @Published var enabled=false
     @Published var sourceKind=SubtitleSource.external
     @Published var track=0
-    @Published var external:URL?
+    @Published var external:URL? {
+        didSet { if external != oldValue { discardExternalSnapshot() } }
+    }
     @Published var overrideStyle=false
     @Published var style=SubtitleStyle()
     @Published private(set) var tracks=[SubtitleTrack]()
@@ -175,6 +177,9 @@ final class SubtitleProcess: @unchecked Sendable {
     @Published private(set) var message:String?
     @Published private(set) var render:RenderSubtitles?
     private var directory:SubtitleDirectory?
+    // The imported text belongs to the source session, not to the active render job.
+    // Switching tracks can cancel conversion without losing the original file contents.
+    private var externalSnapshot:Task<String,Error>?
     private var prepared:String?
     private var preparedStyled=false
     private var preparedZero=0.0
@@ -192,6 +197,7 @@ final class SubtitleProcess: @unchecked Sendable {
     var ready:Bool { !enabled || (render != nil && !scanning && !preparing && message == nil) }
     func reset() {
         epoch=UUID(); task?.cancel(); task=nil; job?.cancel(); job=nil
+        discardExternalSnapshot()
         enabled=false; tracks=[]; unsupported=0; external=nil; render=nil; renderedText=nil; preparationSelection=nil; prepared=nil; directory=nil; video=nil
         scanning=false; preparing=false; message=nil; sourceKind = .external; overrideStyle=false
     }
@@ -218,6 +224,28 @@ final class SubtitleProcess: @unchecked Sendable {
         panel.message="Choose UTF-8 or UTF-16 SRT, WebVTT, ASS or SSA subtitles."
         return panel.runModal() == .OK ? panel.url : nil
     }
+    func importExternal(_ file:URL) {
+        discardExternalSnapshot() // Reimport the same path only on an explicit user action.
+        external=file; sourceKind = .external
+        _=snapshot(for:file)
+        prepare()
+    }
+    private func discardExternalSnapshot() {
+        externalSnapshot?.cancel(); externalSnapshot=nil
+    }
+    private func snapshot(for file:URL) -> Task<String,Error> {
+        if let externalSnapshot { return externalSnapshot }
+        let task=Task.detached(priority:.userInitiated) { () throws -> String in
+            try Task.checkCancellation()
+            guard ["srt","vtt","ass","ssa"].contains(file.pathExtension.lowercased()) else { throw ExportFailure.message("Unsupported subtitles. Choose SRT, WebVTT, ASS or SSA; bitmap subtitles cannot be burned in.") }
+            guard let bytes=try? Data(contentsOf:file),bytes.count<=32*1024*1024 else { throw ExportFailure.message("The subtitle file is missing, unreadable or larger than 32 MB. Choose it again.") }
+            let text=try SubtitleComposer.decode(bytes)
+            try Task.checkCancellation()
+            return text
+        }
+        externalSnapshot=task
+        return task
+    }
     /// Catalog defaults and disabled track changes must not start a full-file extraction.
     /// Keep an explicit file import already preparing the same selection.
     func sourceSelectionChanged() {
@@ -240,17 +268,17 @@ final class SubtitleProcess: @unchecked Sendable {
         guard let video, let dir=directory else { return }
         let selected=sourceKind, file=external, styled=self.styled, zero=sourceKind == .external ? origin : 0, stream=track
         guard selected == .container || file != nil else { message=enabled ? "Choose a subtitle file." : nil; return }
+        let snapshot=selected == .external ? file.map { self.snapshot(for:$0) } : nil
         preparing=true
         let job=SubtitleProcess(); self.job=job
         task=Task { [weak self] in
             do {
-                let text=try await Task.detached { () throws -> String in
+                let text=try await Task.detached { () async throws -> String in
                     let output=dir.url.appendingPathComponent("prepared-\(token).ass")
                     defer { try? FileManager.default.removeItem(at:output) }
                     if selected == .external, let file {
-                        guard ["srt","vtt","ass","ssa"].contains(file.pathExtension.lowercased()) else { throw ExportFailure.message("Unsupported subtitles. Choose SRT, WebVTT, ASS or SSA; bitmap subtitles cannot be burned in.") }
-                        guard let bytes=try? Data(contentsOf:file),bytes.count<=32*1024*1024 else { throw ExportFailure.message("The subtitle file is missing, unreadable or larger than 32 MB. Choose it again.") }
-                        let text=try SubtitleComposer.decode(bytes)
+                        guard let snapshot else { throw ExportFailure.message("Choose a subtitle file.") }
+                        let text=try await snapshot.value
                         if styled {
                             try text.write(to:output,atomically:true,encoding:.utf8)
                         } else {

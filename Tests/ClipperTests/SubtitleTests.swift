@@ -315,3 +315,66 @@ extension SubtitleTests {
         XCTAssertFalse(editor.subtitles.enabled); XCTAssertNotNil(editor.subtitles.render); XCTAssertNil(editor.subtitles.message)
     }
 }
+
+extension SubtitleTests {
+    @MainActor func testImportedSnapshotSurvivesSourceChangesAfterFileEditOrMove() async throws {
+        let editor=Editor(),c=editor.subtitles,directory=try SubtitleDirectory()
+        c.open(fixture("two-tracks.mkv"),details:try details("two-tracks.mkv"))
+        defer { c.reset() }
+        try await wait { !c.scanning }
+        c.enabled=true
+        for name in ["dialogue.srt","dialogue.vtt","styled.ass","styled.ssa"] {
+            let file=directory.url.appendingPathComponent(name)
+            let text=try String(contentsOf:fixture(name),encoding:.utf8)
+            try text.write(to:file,atomically:true,encoding:.utf8)
+            editor.importSubtitles(file)
+            try await wait { !c.preparing }
+            let original=try String(contentsOf:XCTUnwrap(c.render).file,encoding:.utf8)
+            let modified=text.replacingOccurrences(of:"Subtitle parity",with:"Changed on disk")
+                .replacingOccurrences(of:"WebVTT cue",with:"Changed on disk")
+                .replacingOccurrences(of:"Authored position",with:"Changed on disk")
+            try modified.write(to:file,atomically:true,encoding:.utf8)
+            for moved in [false,true] {
+                if moved { try FileManager.default.moveItem(at:file,to:file.appendingPathExtension("moved")) }
+                c.sourceKind = .container; c.track=c.tracks[1].id; c.sourceSelectionChanged()
+                try await wait { !c.preparing }
+                c.sourceKind = .external; c.sourceSelectionChanged()
+                try await wait { !c.preparing }
+                XCTAssertNil(c.message,"\(name), moved=\(moved)")
+                let actual=try c.render.map { try String(contentsOf:$0.file,encoding:.utf8) }
+                XCTAssertEqual(actual,original,"Switching source must retain the imported snapshot for \(name), moved=\(moved)")
+            }
+        }
+    }
+}
+
+extension SubtitleTests {
+    @MainActor func testSnapshotSurvivesDisabledSwitchButClearAndResetDiscardIt() async throws {
+        let editor=Editor(),c=editor.subtitles,directory=try SubtitleDirectory()
+        let source=fixture("two-tracks.mkv"),info=try details("two-tracks.mkv")
+        c.open(source,details:info); defer { c.reset() }
+        try await wait { !c.scanning }
+        let file=directory.url.appendingPathComponent("dialogue.srt")
+        let text=try String(contentsOf:fixture("dialogue.srt"),encoding:.utf8)
+        try text.write(to:file,atomically:true,encoding:.utf8)
+        c.enabled=true; editor.importSubtitles(file); try await wait { !c.preparing }
+        try FileManager.default.removeItem(at:file)
+        c.enabled=false; c.sourceKind = .container; c.sourceSelectionChanged()
+        c.sourceKind = .external; c.sourceSelectionChanged()
+        c.enabled=true; c.prepare(); try await wait { !c.preparing }
+        XCTAssertNil(c.message)
+        XCTAssertTrue(try String(contentsOf:XCTUnwrap(c.render).file,encoding:.utf8).contains("Subtitle parity"))
+
+        c.external=nil; c.prepare() // The clear button must discard the snapshot, too.
+        c.external=file; c.prepare(); try await wait { !c.preparing }
+        XCTAssertNil(c.render); XCTAssertTrue(c.message?.contains("missing") == true)
+        try text.replacingOccurrences(of:"Subtitle parity",with:"Explicit replacement").write(to:file,atomically:true,encoding:.utf8)
+        editor.importSubtitles(file); try await wait { !c.preparing }
+        XCTAssertTrue(try String(contentsOf:XCTUnwrap(c.render).file,encoding:.utf8).contains("Explicit replacement"))
+
+        try FileManager.default.removeItem(at:file)
+        c.open(source,details:info); try await wait { !c.scanning }
+        c.external=file; c.sourceKind = .external; c.enabled=true; c.prepare(); try await wait { !c.preparing }
+        XCTAssertNil(c.render); XCTAssertTrue(c.message?.contains("missing") == true)
+    }
+}
