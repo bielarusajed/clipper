@@ -5,7 +5,7 @@ enum URLImportLayout {
     static let buttonWidth:CGFloat=200
     static let tableWidth:CGFloat=940
     static let tableHeight:CGFloat=330
-    static let compactHeight:CGFloat=72
+    static let compactHeight:CGFloat=120
     static let expandedHeight:CGFloat=compactHeight+18+tableHeight+32
 }
 
@@ -28,6 +28,28 @@ struct URLImportView:View {
                     .accessibilityLabel("Video URL").disabled(importer.downloadRequested)
                 downloadButton
             }
+            VStack(alignment:.leading,spacing:8) {
+                Toggle("Import a rough time range",isOn:$importer.rangeEnabled)
+                    .toggleStyle(.checkbox).font(.system(size:12))
+                if importer.rangeEnabled {
+                    HStack(spacing:8) {
+                        Text("Start")
+                        TextField("08:00",text:$importer.rangeStart).accessibilityLabel("Rough range start")
+                        Text("End")
+                        TextField("08:30",text:$importer.rangeEnd).accessibilityLabel("Rough range end")
+                    }.font(.system(size:12)).textFieldStyle(.roundedBorder).monospacedDigit()
+                    Text("Adds 5 seconds on each side, plus nearby keyframes. Trim precisely after import. Some sites may still transfer most of the video.")
+                        .font(.system(size:11)).foregroundStyle(.secondary).fixedSize(horizontal:false,vertical:true)
+                    if let duration=importer.media?.duration, duration.isFinite, duration > 0 {
+                        Text("Video duration: \(TimeText.format(duration))").font(.system(size:11)).foregroundStyle(.secondary)
+                    } else if importer.media != nil {
+                        Text("Source duration unavailable. Enter a finite end time.").font(.system(size:11)).foregroundStyle(.secondary)
+                    }
+                } else if let time=importer.media?.timestampHint {
+                    Button("Link starts at \(TimeText.format(time)). Use a 30-second range") { importer.useTimestampHint() }
+                        .buttonStyle(.link).font(.system(size:11))
+                }
+            }.disabled(importer.downloadRequested)
             if importer.formatsVisible {
                 HStack(spacing:12) {
                     Text(importer.media?.title ?? "Formats").font(.system(size:12,weight:.medium)).lineLimit(1)
@@ -46,6 +68,9 @@ struct URLImportView:View {
                     Text(error).font(.system(size:12)).foregroundStyle(.red)
                         .textSelection(.enabled).frame(maxWidth:.infinity,alignment:.leading)
                 }.frame(maxHeight:90)
+                if importer.canRetryFull {
+                    Button("Import full video") { importer.retryFull(open:open) }.disabled(!canDownload)
+                }
             }
 
         }
@@ -61,7 +86,7 @@ struct URLImportView:View {
         if importer.showsActivity && !importer.downloadRequested { return "Loading formats…" }
         if importer.downloadRequested {
             if let progress=importer.progress { return "Downloading \(Int(progress*100))%" }
-            return importer.media == nil ? "Loading formats…" : "Downloading…"
+            return importer.media == nil ? "Loading formats…" : importer.rangeEnabled ? "Importing section…" : "Downloading…"
         }
         return "Download"
     }

@@ -12,6 +12,15 @@ import Combine
     let urlImporter=URLImport()
     @Published var importPresented=false
     private var temporarySource:TemporaryImport?
+    @Published private(set) var importTimeline:ImportTimeline?
+    @Published private(set) var importTimeNote:String?
+    var timeDisplayOffset:Double { importTimeline?.offset ?? 0 }
+    func displayTime(_ local:Double)->Double { local+timeDisplayOffset }
+    func localTime(_ displayed:Double)->Double? {
+        let local=displayed-timeDisplayOffset
+        guard local.isFinite, local >= -0.001, let duration=details?.duration, duration > 0 else { return nil }
+        return max(0,min(local,duration-0.000001))
+    }
     @Published var source: URL?
     @Published var edit=EditSettings()
     private let preferences:ExportPreferences
@@ -121,6 +130,8 @@ import Combine
         let previous=temporarySource
         waveform.resetSource()
         temporarySource=temporary
+        importTimeline=temporary?.timeline
+        importTimeNote=temporary?.range == nil ? nil : "Original video times · imported section"
         defer { if let previous { playback.queue.async { withExtendedLifetime(previous) {} } } }
         cancelNudges(); timelineZoom=0
         let id=UUID(); loadingID=id; loading=true
@@ -128,6 +139,10 @@ import Combine
         playback.setMuted(false)
         playback.open(url,onFailure:{ [weak self] in self?.loading=false }) { [weak self] in
             guard let self, self.loadingID==id, let info=self.details else { return }
+            if let timeline=self.importTimeline, abs(timeline.localOrigin-info.origin) >= 0.002 {
+                self.importTimeline=nil
+                self.importTimeNote="Original timestamps unavailable. Showing local section times."
+            }
             if info.hdr { self.edit.codec = .hevc }
             self.start=self.playback.frame
             self.playback.seek(max(0,info.duration-0.000001),onFailure:{
@@ -152,6 +167,7 @@ import Combine
         invalidatePreview(); playback.close()
         let previous=temporarySource; temporarySource=nil
         if let previous { playback.queue.async { withExtendedLifetime(previous) {} } }
+        importTimeline=nil; importTimeNote=nil
         source=nil; start=nil; end=nil; edit=preferences.makeSettings(); exportedClip.set(nil); nextOutputURL=nil; error=nil
     }
     func prepareToQuit() {

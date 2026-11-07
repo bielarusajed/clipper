@@ -8,9 +8,16 @@ struct URLMedia: Decodable {
     let liveStatus:String?
     let isLive:Bool?
     let type:String?
+    let startTime:Double?
+    var timestampHint:Double? {
+        guard let time=startTime, time.isFinite, time > 0, time < ImportRange.maximumTime,
+              duration == nil || time < duration! else { return nil }
+        return time
+    }
 
     enum CodingKeys:String,CodingKey {
         case id,title,duration,formats
+        case startTime="start_time"
         case liveStatus="live_status", isLive="is_live", type="_type"
     }
 

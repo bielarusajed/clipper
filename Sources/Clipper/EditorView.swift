@@ -41,11 +41,15 @@ struct EditorView:View {
             return true
         }
         .onChange(of:editor.edit) { old,_ in editor.settingsChanged(old) }
-        .onChange(of:editor.start) { _,_ in startText=TimeText.format(editor.inTime) }
-        .onChange(of:editor.end) { _,value in endText=TimeText.format(value?.time ?? 0) }
+        .onChange(of:editor.start) { _,_ in startText=TimeText.format(editor.displayTime(editor.inTime)) }
+        .onChange(of:editor.end) { _,value in endText=TimeText.format(editor.displayTime(value?.time ?? 0)) }
+        .onChange(of:editor.timeDisplayOffset) { _,_ in
+            startText=TimeText.format(editor.displayTime(editor.inTime))
+            endText=TimeText.format(editor.displayTime(editor.end?.time ?? 0))
+        }
         .onChange(of:editor.boundaryRevision) { _,_ in
-            if editor.lastBoundaryIsStart { startText=TimeText.format(editor.inTime) }
-            else { endText=TimeText.format(editor.end?.time ?? 0) }
+            if editor.lastBoundaryIsStart { startText=TimeText.format(editor.displayTime(editor.inTime)) }
+            else { endText=TimeText.format(editor.displayTime(editor.end?.time ?? 0)) }
         }
         .background(URLImportPresenter(editor:editor).frame(width:0,height:0))
         .alert("Clipper",isPresented:Binding(get:{editor.error != nil || playback.error != nil},set:{if !$0 {editor.error=nil;playback.error=nil}})) {
@@ -73,7 +77,7 @@ struct EditorView:View {
                                 boundaryRow("End",isStart:false,text:$endText,value:editor.end?.time ?? 0)
                                 rowDivider
                                 HStack {
-                                    Text("Snap to source frames")
+                                    Text(editor.importTimeNote ?? "Snap to source frames").help(editor.importTimeNote ?? "Snap to source frames").lineLimit(1)
                                 }.font(.system(size:10)).foregroundStyle(C1.muted).padding(.horizontal,10).frame(height:27)
                             }
                         }
@@ -137,9 +141,11 @@ struct EditorView:View {
                 .overlay(RoundedRectangle(cornerRadius:5).stroke(C1.line,lineWidth:1))
                 .overlay(alignment:.leading) { C1.amber.frame(width:2).padding(.vertical,4) }
                 .onSubmit {
-                    guard text.wrappedValue != TimeText.format(value) else { return }
-                    if let t=TimeText.parse(text.wrappedValue) { isStart ? editor.markStart(t) : editor.markEnd(t) }
-                    else { text.wrappedValue=TimeText.format(value); editor.error="Enter seconds or a time such as 00:01:23.450." }
+                    guard text.wrappedValue != TimeText.format(editor.displayTime(value)) else { return }
+                    if let displayed=TimeText.parse(text.wrappedValue), let t=editor.localTime(displayed) {
+                        isStart ? editor.markStart(t) : editor.markEnd(t)
+                    }
+                    else { text.wrappedValue=TimeText.format(editor.displayTime(value)); editor.error="Enter a time inside the imported video, as seconds or hh:mm:ss.sss." }
                 }
                 .help(isStart ? "First included source frame" : "Last included source frame")
             nudgeButton(isStart:isStart,direction:1)
@@ -289,7 +295,7 @@ struct EditorView:View {
                     Image(systemName:editor.isPlaying ? "pause.fill" : "play.fill").frame(width:27,height:24).background(C1.blue.opacity(0.07),in:RoundedRectangle(cornerRadius:5))
                 }.help("Play / pause (Space)")
                 Button { editor.stepFrame(1) } label: { Image(systemName:"chevron.right") }.help("Next frame (→)")
-                Text(TimeText.format(editor.displayedPosition)).font(.system(size:12,weight:.semibold).monospacedDigit()).foregroundStyle(C1.ink).padding(.leading,3)
+                Text(TimeText.format(editor.displayTime(editor.displayedPosition))).font(.system(size:12,weight:.semibold).monospacedDigit()).foregroundStyle(C1.ink).padding(.leading,3)
                 if playback.seeking { ProgressView().controlSize(.mini) }
                 Spacer()
             }.buttonStyle(.borderless).font(.system(size:11)).foregroundStyle(C1.secondary).frame(height:EditorWindowLayout.transportHeight)

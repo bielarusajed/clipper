@@ -69,11 +69,11 @@ struct Timeline:View {
                 .accessibilityHint("Click or drag to move the detailed timeline")
             }.frame(height:9)
             HStack {
-                Text("00:00")
+                Text(TimeText.format(editor.displayTime(0)).dropLast(4))
                 Spacer()
-                Text("Whole video")
+                Text(editor.importTimeNote == nil ? "Whole video" : "Imported section")
                 Spacer()
-                Text(TimeText.format(editor.details?.duration ?? 0).dropLast(4))
+                Text(TimeText.format(editor.displayTime(editor.details?.duration ?? 0)).dropLast(4))
             }.font(.system(size:8)).foregroundStyle(C1.muted).monospacedDigit()
         }
     }
@@ -106,6 +106,7 @@ struct TimelineSurface:NSViewRepresentable {
         let changed=abs(view.frame.width-width)>1
         let center=scroll.contentView.bounds.midX/max(1,view.frame.width)
         let moved=abs(view.position-position)>0.000001
+        view.displayOffset=editor.timeDisplayOffset
         view.duration=duration; view.start=editor.inTime; view.end=editor.outTime; view.position=position
         view.enabled = !editor.exporting && !editor.loading
         view.waveformVisible=editor.waveformVisible && !(editor.details?.audioLabels.isEmpty ?? true)
@@ -159,6 +160,7 @@ final class TimelineScrollView:NSScrollView {
 final class TimelineCanvas:NSView {
     override var isFlipped:Bool { true }
     var duration=1.0, start=0.0, end=1.0, position=0.0, zoom=1.0
+    var displayOffset=0.0
     var enabled=true
     var waveformVisible=false
     var waveform:WaveformPeaks?
@@ -213,7 +215,7 @@ final class TimelineCanvas:NSView {
         while t <= time(visible.maxX)+step {
             let xx=x(t)
             NSColor.separatorColor.setStroke(); let p=NSBezierPath(); p.move(to:CGPoint(x:xx,y:18)); p.line(to:CGPoint(x:xx,y:23)); p.stroke()
-            let label=TimeText.format(t)
+            let label=TimeText.format(t+displayOffset)
             (label as NSString).draw(at:CGPoint(x:xx+3,y:2),withAttributes:attrs)
             t += step
         }

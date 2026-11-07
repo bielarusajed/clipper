@@ -211,6 +211,7 @@ final class URLImportTests:XCTestCase {
         // Fixed test-only script: copy a real fixture and emit yt-dlp's final-path protocol.
         let script="""
         #!/bin/sh
+        printf '%s\\n' "$@" > arguments.txt
         /bin/cp '\(fixture.path)' source.mp4
         printf 'CLIPPER_FILE:"%s/source.mp4"\\n' "$PWD"
         """
@@ -224,6 +225,11 @@ final class URLImportTests:XCTestCase {
         var imported:TemporaryImport?=try await URLMediaDownload.download(url:url,media:info,selector:"137+140",
             tools:tools,temporaryRoot:destination) { _ in }
         let output=try XCTUnwrap(imported?.file)
+        let args=try String(contentsOf:output.deletingLastPathComponent().appendingPathComponent("arguments.txt"),encoding:.utf8)
+        XCTAssertFalse(args.contains("--download-sections"))
+        XCTAssertFalse(args.contains("--downloader-args"))
+        XCTAssertFalse(args.contains("--fixup"))
+        XCTAssertTrue(args.contains("source.%(ext)s"))
         XCTAssertEqual(output.lastPathComponent,"Example.mp4")
         XCTAssertEqual(try Data(contentsOf:output),try Data(contentsOf:fixture))
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath:destination.path).count,1)

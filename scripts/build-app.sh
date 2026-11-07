@@ -6,7 +6,7 @@ export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Develope
 export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
 export CLANG_MODULE_CACHE_PATH="$ROOT/.build/ModuleCache"
 export SWIFTPM_MODULECACHE_OVERRIDE="$ROOT/.build/ModuleCache"
-if [[ ! -x .build/media/bin/ffmpeg ]]; then bash scripts/build-media.sh; fi
+if ! bash scripts/check-media.sh; then bash scripts/build-media.sh; fi
 xcrun swift build --build-system native --disable-sandbox --scratch-path .build/swift --cache-path .build/cache -c release -debug-info-format none
 if [[ ! -f .build/Clipper.icns || scripts/make-icon.swift -nt .build/Clipper.icns ]]; then
   xcrun swift scripts/make-icon.swift
