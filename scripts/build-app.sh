@@ -7,7 +7,9 @@ export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
 export CLANG_MODULE_CACHE_PATH="$ROOT/.build/ModuleCache"
 export SWIFTPM_MODULECACHE_OVERRIDE="$ROOT/.build/ModuleCache"
 if ! bash scripts/check-media.sh; then bash scripts/build-media.sh; fi
-xcrun swift build --build-system native --disable-sandbox --scratch-path .build/swift --cache-path .build/cache -c release -debug-info-format none
+SWIFT_BUILD=(xcrun swift build --disable-sandbox --scratch-path .build/swift --cache-path .build/cache -c release -debug-info-format none)
+"${SWIFT_BUILD[@]}"
+BIN_DIR="$("${SWIFT_BUILD[@]}" --show-bin-path)"
 if [[ ! -f .build/Clipper.icns || scripts/make-icon.swift -nt .build/Clipper.icns ]]; then
   xcrun swift scripts/make-icon.swift
   iconutil -c icns .build/Clipper.iconset -o .build/Clipper.icns
@@ -15,7 +17,7 @@ fi
 STAGING="$ROOT/.build/package-$(uuidgen)"
 APP="$STAGING/Clipper.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Helpers" "$APP/Contents/Frameworks" "$APP/Contents/Resources/Licenses"
-cp .build/swift/release/Clipper "$APP/Contents/MacOS/Clipper"
+cp "$BIN_DIR/Clipper" "$APP/Contents/MacOS/Clipper"
 cp .build/media/bin/ffmpeg "$APP/Contents/Helpers/ffmpeg"
 cp .build/media/bin/ffprobe "$APP/Contents/Helpers/ffprobe"
 python3 scripts/package-libraries.py "$APP"
