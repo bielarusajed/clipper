@@ -1,5 +1,9 @@
 Clipper uses FFmpeg 8.0.1, licensed under LGPL 2.1 or later.
 FFmpeg is built without GPL, nonfree, or version3 components.
+Clipper modifies libavformat/tls.h as of 2026-11-07 to enable peer certificate
+verification by default. The dated patch is included in patches/ in the matching
+Clipper source archive and beside the dependency sources. HTTPS uses macOS
+SecureTransport and the system trust store.
 https://ffmpeg.org/
 The matching FFmpeg source archive and configure script are included in the
 distribution's Sources folder. See FFmpeg-LGPL.txt for the license.

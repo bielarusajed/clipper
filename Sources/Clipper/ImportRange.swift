@@ -34,7 +34,8 @@ struct ImportRange:Equatable,Sendable {
     func downloaderArguments(duration:Double?) throws -> [String] {
         try validate(duration:duration)
         return ["--download-sections","*\(Self.number(paddedStart))-\(Self.number(paddedEnd(duration:duration)))",
-                "--downloader-args","ffmpeg_i1:-copyts -start_at_zero"]
+                "--downloader-args","ffmpeg_i:-copyts -start_at_zero -protocol_whitelist http,https,tcp,tls,crypto -rw_timeout 30000000",
+                "--downloader-args","ffmpeg_o:-sn -dn -f matroska","--fixup","never"]
     }
     static func number(_ value:Double)->String { String(format:"%.6f",locale:Locale(identifier:"en_US_POSIX"),value) }
 }
@@ -66,28 +67,43 @@ struct ImportProbe:Decodable {
     }
 
     /// Decoding the first and final frame checks actual video coverage, not audio/container length.
-    static func verify(file:URL,range:ImportRange,offset:Double,expectedOrigin:Double) async throws {
-        try await Task.detached {
+    static func verify(file:URL,range:ImportRange,offset:Double,expectedOrigin:Double,sourceDuration:Double?=nil) async throws {
+        let request=ImportVerificationRequest()
+        try await withTaskCancellationHandler {
             try Task.checkCancellation()
-            var error=[CChar](repeating:0,count:512)
-            guard let media=clip_open(file.path,-1,&error,512) else {
-                throw ImportFailure.message("Could not decode the downloaded section.")
-            }
-            defer { clip_close(media) }
-            let info=clip_info(media)
-            guard abs(info.origin-expectedOrigin) < 0.002 else {
-                throw ImportFailure.message("Could not verify the section's original timestamps. Try importing the full video.")
-            }
-            let first=clip_frame(media,0)
-            defer { first.sample?.release() }
-            let last=clip_frame(media,max(0,info.duration-0.000001))
-            defer { last.sample?.release() }
-            guard first.kind == 1, last.kind == 1,
-                  first.time+offset <= range.start+0.002,
-                  last.time+last.duration+offset >= range.end-0.002 else {
-                throw ImportFailure.message("The downloaded section does not cover the requested range. Try a wider range or import the full video.")
-            }
-        }.value
+            try await Task.detached {
+                try Task.checkCancellation()
+                var error=[CChar](repeating:0,count:512)
+                guard let media=clip_open(file.path,-1,&error,512) else {
+                    throw ImportFailure.message("Could not decode the downloaded section.")
+                }
+                defer { clip_close(media) }
+                let info=clip_info(media)
+                guard abs(info.origin-expectedOrigin) < 0.002 else {
+                    throw ImportFailure.message("Could not verify the section's original timestamps. Try importing the full video.")
+                }
+                let first=clip_frame_cancellable(media,0,request.pointer,0)
+                defer { first.sample?.release() }
+                let last=clip_frame_cancellable(media,max(0,info.duration-0.000001),request.pointer,0)
+                defer { last.sample?.release() }
+                if first.kind == -3 || last.kind == -3 { throw CancellationError() }
+                // At the real source edges, audio may lead video and site durations may round up.
+                // Bound metadata rounding to one second; interior cuts still require full coverage.
+                let sourceStart=range.paddedStart == 0 && abs(offset-expectedOrigin) <= 0.1
+                let sourceEnd=sourceDuration.map { $0.isFinite && $0 > 0 && range.paddedEnd(duration:$0) == $0 } ?? false
+                let firstCovered=first.time+offset <= range.start+0.002 || (sourceStart && first.time+offset < range.end)
+                let lastCovered=last.time+last.duration+offset >= range.end-(sourceEnd ? 1 : 0.002)
+                guard first.kind == 1, last.kind == 1, firstCovered, lastCovered else {
+                    throw ImportFailure.message("The downloaded section does not cover the requested range. Try a wider range or import the full video.")
+                }
+            }.value
+        } onCancel: { request.cancel() }
         try Task.checkCancellation()
     }
+}
+
+private final class ImportVerificationRequest:@unchecked Sendable {
+    let pointer=clip_request_create()!
+    func cancel() { clip_request_set(pointer,1) }
+    deinit { clip_request_free(pointer) }
 }

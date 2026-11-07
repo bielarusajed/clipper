@@ -14,8 +14,8 @@ import UniformTypeIdentifiers
     func displayTime(_ local:Double)->Double { local+timeDisplayOffset }
     func localTime(_ displayed:Double)->Double? {
         let local=displayed-timeDisplayOffset
-        guard local >= -0.001, local < (details?.duration ?? 0) else { return nil }
-        return max(0,local)
+        guard local.isFinite, local >= -0.001, let duration=details?.duration, duration > 0 else { return nil }
+        return max(0,min(local,duration-0.000001))
     }
     @Published var source: URL?
     @Published var edit=EditSettings()

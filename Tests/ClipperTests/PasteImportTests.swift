@@ -253,6 +253,58 @@ final class PasteImportTests:XCTestCase {
         assertEqual(await service.ranges,[try ImportRange(start:480,end:510),nil])
     }
 
+    @MainActor func testRangeRevalidatesWhenDurationArrives() async throws {
+        let service=ImportServiceSpy(duration:100)
+        let model=URLImport(service:service)
+        model.begin(url:URL(string:"https://example.com/video")!)
+        model.rangeEnabled=true; model.rangeStart="90"; model.rangeEnd="110"
+        model.download { _ in XCTFail("Out-of-bounds range must not open") }
+        await service.releaseLookup()
+        try await waitUntil { !model.busy }
+        XCTAssertNotNil(model.error)
+        XCTAssertFalse(model.canRetryFull)
+        assertEqual(await service.downloadCount,0)
+    }
+    @MainActor func testRangeFailureOffersExplicitFullRetry() async throws {
+        let service=ImportServiceSpy(failRange:true)
+        await service.releaseLookup(); await service.releaseDownload()
+        let model=URLImport(service:service)
+        model.begin(url:URL(string:"https://example.com/video")!)
+        model.rangeEnabled=true; model.rangeStart="10"; model.rangeEnd="20"
+        var opened=false
+        model.download { _ in opened=true }
+        try await waitUntil { !model.busy }
+        XCTAssertFalse(opened); XCTAssertTrue(model.canRetryFull)
+        assertEqual(await service.downloadCount,1)
+        model.retryFull { _ in opened=true }
+        try await waitUntil { opened }
+        XCTAssertFalse(model.rangeEnabled)
+        assertEqual(await service.ranges,[try ImportRange(start:10,end:20),nil])
+    }
+
+    @MainActor func testImportWindowGrowsToFitRangeControls() async throws {
+        _=NSApplication.shared
+        let service=ImportServiceSpy(duration:600)
+        await service.releaseLookup()
+        let model=URLImport(service:service)
+        model.begin(url:URL(string:"https://example.com/video")!)
+        try await waitUntil { !model.busy }
+        let parent=NSWindow(contentRect:NSRect(x:100,y:100,width:1100,height:800),styleMask:[.titled],backing:.buffered,defer:false)
+        parent.isReleasedWhenClosed=false
+        let controller=URLImportWindowController(importer:model,parent:parent,open:{ _ in },onClose:{})
+        defer { controller.close(); parent.close() }
+        controller.showWindow(nil)
+        let window=try XCTUnwrap(controller.window)
+        window.contentView?.layoutSubtreeIfNeeded()
+        try await Task.sleep(for:.milliseconds(50))
+        let compact=window.frame.height
+        model.rangeEnabled=true; model.rangeStart="08:00"; model.rangeEnd="08:30"
+        try await waitUntil { window.frame.height > compact+60 }
+        let content=try XCTUnwrap(window.contentView)
+        XCTAssertGreaterThanOrEqual(content.bounds.height,content.fittingSize.height-1)
+        XCTAssertEqual(window.frame.width,URLImportLayout.width,accuracy:1)
+    }
+
     @MainActor private func waitUntil(_ condition:() async -> Bool) async throws {
         let deadline=Date().addingTimeInterval(3)
         while !(await condition()) {
@@ -263,6 +315,9 @@ final class PasteImportTests:XCTestCase {
 }
 
 private actor ImportServiceSpy:URLImportServicing {
+    private let duration:Double?
+    private let failRange:Bool
+    init(duration:Double?=nil,failRange:Bool=false) { self.duration=duration; self.failRange=failRange }
     private var lookupReleased=false
     private var downloadReleased=false
     private(set) var lookupCount=0
@@ -283,10 +338,11 @@ private actor ImportServiceSpy:URLImportServicing {
         lookupCount += 1
         do { while !lookupReleased { try await Task.sleep(for:.milliseconds(10)) }; try Task.checkCancellation() }
         catch { cancelledLookups += 1; throw error }
-        let json:[String:Any]=["id":url.absoluteString,"title":"Example","formats":[
+        var json:[String:Any]=["id":url.absoluteString,"title":"Example","formats":[
             ["format_id":"18","vcodec":"h264","acodec":"aac"],
             ["format_id":"137","vcodec":"h264","acodec":"none"],
             ["format_id":"140","vcodec":"none","acodec":"aac"]]]
+        if let duration { json["duration"]=duration }
         return try URLMedia.decode(JSONSerialization.data(withJSONObject:json))
     }
     func download(url:URL,media:URLMedia,selector:String,excludeAudio:Bool,range:ImportRange?,tools:ImportTools,
@@ -294,6 +350,7 @@ private actor ImportServiceSpy:URLImportServicing {
         downloadCount += 1; ranges.append(range); selectors.append(selector); excludedAudio.append(excludeAudio); downloadURLs.append(url)
         do { while !downloadReleased { try await Task.sleep(for:.milliseconds(10)) }; try Task.checkCancellation() }
         catch { cancelledDownloads += 1; throw error }
+        if failRange && range != nil { throw ImportFailure.message("This format cannot be partially downloaded.") }
         let directory=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString,isDirectory:true)
         try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true)
         let file=directory.appendingPathComponent("Example.mp4")

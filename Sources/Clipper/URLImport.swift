@@ -123,6 +123,7 @@ struct URLImportService:URLImportServicing {
                     busy=false; task=nil; progress=nil; pendingDownload=nil; downloadRequested=false; cancelling=false
                 }
             }
+            var transferStarted=false
             do {
                 let tools=try await service.prepare { [weak self] message in
                     Task { @MainActor in
@@ -144,6 +145,7 @@ struct URLImportService:URLImportServicing {
                 try intent.range?.validate(duration:info.duration)
                 let selector=try info.selector(video:intent.video,audio:intent.audio)
                 status=intent.range == nil ? "Downloading…" : "Downloading section…"
+                transferStarted=true
                 let result=try await service.download(url:url,media:info,selector:selector,
                     excludeAudio:intent.audio == "none",range:intent.range,tools:tools) { [weak self] update in
                         Task { @MainActor in
@@ -160,7 +162,7 @@ struct URLImportService:URLImportServicing {
             } catch {
                 if operation == token {
                     self.error=error.localizedDescription; status=""
-                    canRetryFull=pendingDownload?.range != nil
+                    canRetryFull=transferStarted && pendingDownload?.range != nil
                 }
             }
         }
@@ -270,15 +272,23 @@ enum URLMediaDownload {
         defer { if !completed { try? files.removeItem(at:workspace) } }
         let rangeArgs=try range?.downloaderArguments(duration:media.duration) ?? []
         let args=arguments(tools:tools)+rangeArgs+["--no-cache-dir","--no-simulate","--no-overwrites","--progress","--progress-delta","0.25","--format",selector,
-            "--merge-output-format","mkv","--output",workspace.appendingPathComponent("source.%(ext)s").path,
+            "--merge-output-format","mkv","--output",workspace.appendingPathComponent(range == nil ? "source.%(ext)s" : "source.mkv").path,
             "--progress-template","download:CLIPPER_PROGRESS:%(progress)j",
             "--progress-template","postprocess:CLIPPER_POST:%(progress.status)s",
             "--print","after_move:CLIPPER_FILE:%(filepath)j","--",url.absoluteString]
         if range != nil { progress(ImportProgress(label:"Downloading section…",fraction:nil)) }
-        let output=try await ImportProcess().run(executable:tools.ytDLP,arguments:args,directory:workspace,
-            environment:try environment(workspace:workspace),outputLimit:1024*1024,truncatingOutput:true) { line in
-                if let update=ImportProgress.parse(line) { progress(update) }
-            }
+        let output:Data
+        do {
+            output=try await ImportProcess().run(executable:tools.ytDLP,arguments:args,directory:workspace,
+                environment:try environment(workspace:workspace),outputLimit:1024*1024,truncatingOutput:true) { line in
+                    if let update=ImportProgress.parse(line) { progress(update) }
+                }
+        } catch is CancellationError { throw CancellationError() }
+        catch {
+            guard range != nil else { throw error }
+            // Remote FFmpeg diagnostics can contain expiring signed media URLs.
+            throw ImportFailure.message("Could not download this range. The source may be unavailable, the network may have failed, or the format may not support ranges. Try again, choose another format, or import the full video.")
+        }
         try Task.checkCancellation()
         var file=try completedFile(output:output,workspace:workspace)
         var timeline:ImportTimeline?
@@ -300,7 +310,7 @@ enum URLMediaDownload {
                 throw ImportFailure.message("The source did not produce a usable section. Try importing the full video.")
             }
             let mapping=ImportTimeline(offset:origin+localOrigin,localOrigin:localOrigin)
-            try await ImportProbe.verify(file:normalized,range:range,offset:mapping.offset,expectedOrigin:localOrigin)
+            try await ImportProbe.verify(file:normalized,range:range,offset:mapping.offset,expectedOrigin:localOrigin,sourceDuration:media.duration)
             timeline=mapping
             try files.removeItem(at:file); file=normalized
         } else if excludeAudio {
