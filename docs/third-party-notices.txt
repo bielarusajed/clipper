@@ -22,3 +22,16 @@ https://github.com/yt-dlp/yt-dlp/blob/master/THIRD_PARTY_LICENSES.txt
 Deno: https://github.com/denoland/deno (MIT; includes third-party components).
 https://github.com/denoland/deno/blob/main/LICENSE.md
 https://github.com/denoland/deno/blob/main/third_party/README.md
+
+Subtitle rendering uses libass 0.17.3 (ISC), HarfBuzz 10.4.0 (MIT),
+FriBidi 1.0.16 (LGPL 2.1 or later), and FreeType 2.13.3 (FreeType License).
+Portions of this software are copyright © 2024 The FreeType Project
+(www.freetype.org). All rights reserved.
+https://github.com/libass/libass
+https://github.com/harfbuzz/harfbuzz
+https://github.com/fribidi/fribidi
+https://freetype.org/
+Their license texts are in Contents/Resources/Licenses and their corresponding
+source archives and recipes accompany this app. CoreText supplies system fonts;
+no Apple fonts are redistributed. Attached fonts are read only from user media.
+pkgconf 2.3.0 is an ISC-licensed build tool and is not bundled in the app.

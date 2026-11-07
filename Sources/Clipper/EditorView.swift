@@ -80,6 +80,7 @@ struct EditorView:View {
                         framing(details)
                         videoSettings(details)
                         if !details.audioLabels.isEmpty { audioSettings(details) }
+                        SubtitleSettingsView(editor:editor,subtitles:editor.subtitles,details:details)
                     } else {
                         VStack(spacing:12) {
                             if editor.loading { ProgressView().controlSize(.small); Text("Opening video…") }

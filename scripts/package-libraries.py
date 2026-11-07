@@ -34,6 +34,8 @@ while queue:
             continue
         else:
             source = pathlib.Path(dependency)
+        if source.exists() and not source.resolve().is_relative_to(source_lib.resolve()) and not source.resolve().is_relative_to(frameworks.resolve()):
+            raise SystemExit(f"Non-private runtime dependency: {source}")
         destination = frameworks / name
         if not destination.exists():
             if not source.exists():

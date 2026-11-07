@@ -20,7 +20,7 @@ Open `dist/Clipper.app`. The app includes its media engine and needs no Homebrew
 - Crop to Original, 16:9, 9:16, 1:1, 4:5, or a custom ratio. Drag the crop and its lower-right resize handle.
 - Keep original resolution or downscale. Presets limit the longest edge and never enlarge the crop.
 - Choose H.264 or H.265 and a quality setting. Video export uses VideoToolbox hardware encoding only. Unsupported encoder sizes produce an error rather than falling back to software.
-- HDR selects HEVC Main10. Convert to SDR explicitly for SDR sharing. Exclude audio with the switch, or choose a track when the source has several. Sources without audio hide the audio section. Audio exports as stereo AAC; subtitles are omitted.
+- HDR selects HEVC Main10. Convert to SDR explicitly for SDR sharing. Exclude audio with the switch, or choose a track when the source has several. Sources without audio hide the audio section. Audio exports as stereo AAC. Subtitles are off by default. Enable Subtitles to burn a container text track or an external SRT, WebVTT, ASS or SSA file into the video. The textformat button opens the anchored style popover. ASS/SSA keeps authored layout and styles unless Override authored style is enabled. Common styling uses output coordinates; authored styling uses the source frame and can be cut off by a crop. HDR burn-in requires Convert to SDR.
 - Preview 5 Seconds renders a sample beginning at the playhead, bounded to the selection. Switch between original and output. Editing invalidates the sample.
 - Floating glass panels hold the left settings and the timeline over one shared window material. The video fills the timeline column width when its aspect ratio allows, and the preview selector aligns with the top of the inspector. The app follows system light/dark appearance. Native glass is used on macOS 26 or newer, with a material fallback on earlier versions.
 - Preview/export stay pinned below the left settings. Close the source with its × button to return to the Open Video empty state.
@@ -35,7 +35,7 @@ Install Xcode and complete its first-run setup. Run:
 bash scripts/build-app.sh
 ```
 
-On the first build, the scripts download and build FFmpeg 8.0.1, dav1d 1.5.4, and zimg 3.0.6. Python 3, a C/C++ compiler and make are build-time requirements. Meson and Ninja are installed into a project-local virtual environment. No Homebrew library is required by the finished app. Build output and downloaded sources stay in `.build/`; the app is in `dist/`.
+On the first build, the scripts download and build FFmpeg 8.0.1, dav1d 1.5.4, zimg 3.0.6, libass 0.17.3, FreeType 2.13.3, HarfBuzz 10.4.0 and FriBidi 1.0.16. Python 3, a C/C++ compiler and make are build-time requirements. Meson and Ninja are installed into a project-local virtual environment. No Homebrew library is required by the finished app. Build output and downloaded sources stay in `.build/`; the app is in `dist/`.
 
 ```sh
 bash scripts/make-fixtures.sh   # Uses a separate test-only FFmpeg with software encoders.
@@ -52,3 +52,11 @@ SwiftUI/AppKit controls sit above libav demux/decode and Apple's sample-buffer v
 The FFmpeg build excludes GPL and nonfree components. Shared libraries, licenses and credits are included in the bundle. Run `bash scripts/package-release.sh` to create the app ZIP and a matching source ZIP with all dependency sources, exact build recipes and package receipts. Distribute both ZIPs together.
 
 AV1 playback on M1 uses software decoding. Long GOPs can cause a delay on a distant exact seek. Nearby forward seeks reuse the decoder, and frame steps use a bounded cache. Playback can resume from cached video and audio; pause keeps the queued media ready. During a cold start the last image stays visible until playback is ready. Some unusual AVI timestamp layouts, Dolby Vision dynamic metadata, and sustained playback of very demanding AV1 files need broader real-world testing. HDR color transfer and primaries are covered by the synthetic tests; Dolby Vision metadata preservation is not claimed.
+
+## Subtitle review build
+
+See [the subtitle handoff](docs/feature-work/hardsubs-handoff.md) for usage,
+validation, limitations and the private review artifacts. Build a separately
+named app with `CLIPPER_REVIEW_BUILD=1 bash scripts/build-app.sh` and package it
+with `CLIPPER_REVIEW_BUILD=1 bash scripts/package-release.sh` after committing.
+The review bundle has its own identifier and no Finder document registration.

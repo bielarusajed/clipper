@@ -35,9 +35,12 @@ struct ExportRequest {
     let end: Double
     let destination: URL
 
+    var subtitles: RenderSubtitles? = nil
+
     func arguments() throws -> [String] {
         guard start >= 0, end > start, end <= details.duration+0.1 else { throw ExportFailure.message("Choose a non-empty clip inside the video.") }
         let g=edit.geometry(for:details)
+        if subtitles != nil && details.hdr && !edit.convertToSDR { throw ExportFailure.message("Burned-in subtitles need Convert to SDR for HDR videos.") }
         let keepHDR=details.hdr && !edit.convertToSDR
         if keepHDR && edit.codec != .hevc { throw ExportFailure.message("HDR needs H.265. Choose H.265 or turn on Convert to SDR.") }
         if edit.codec == .h264 && max(g.outWidth,g.outHeight) > 4096 { throw ExportFailure.message("This size exceeds the H.264 encoder on this Mac. Choose H.265 or a smaller resolution.") }
@@ -47,19 +50,31 @@ struct ExportRequest {
         // Seek by absolute source time and keep preroll; trim after decoding.
         if start > 12 { args += ["-seek_timestamp","1","-ss",number(absoluteStart-10),"-noaccurate_seek"] }
         args += ["-i",source.path,"-map","0:v:0"]
-        var filters=["trim=start=\(number(absoluteStart)):end=\(number(absoluteEnd))","setpts=PTS-(\(number(absoluteStart)))/TB"]
+        var filters=["trim=start=\(number(absoluteStart)):end=\(number(absoluteEnd))"]
+        let subtitleZero=subtitles?.zero ?? absoluteStart
+        filters += ["setpts=PTS-(\(number(subtitleZero)))/TB"]
         if details.hdr && edit.convertToSDR {
             filters += ["zscale=t=linear:npl=100","format=gbrpf32le","tonemap=tonemap=hable:desat=0","zscale=p=bt709:t=bt709:m=bt709:r=tv","format=yuv420p"]
+        }
+        // Match the source decoder's fallback for untagged HD before blending RGB text.
+        if subtitles != nil && !details.hdr && details.colorSpace == 2 && details.width >= 1280 {
+            filters += ["setparams=colorspace=bt709"]
         }
         // FFmpeg autorotates before the filter graph. Square pixels before crop.
         if abs(details.pixelAspect-1) > 0.001 {
             let size=details.displaySize
             filters += ["scale=\(Int(size.width/2)*2):\(Int(size.height/2)*2)","setsar=1"]
         }
+        if let subtitles, subtitles.preserve { filters += [subtitles.filter] }
         filters += ["crop=\(g.width):\(g.height):\(g.x):\(g.y)","scale=\(g.outWidth):\(g.outHeight):flags=lanczos","setsar=1"]
+        if let subtitles {
+            if !subtitles.preserve { filters += [subtitles.filter] }
+            filters += ["setpts=PTS-(\(number(absoluteStart-subtitleZero)))/TB"]
+        }
         args += ["-vf",filters.joined(separator:","),"-c:v",edit.codec.encoder,"-allow_sw","0","-realtime","0","-q:v",String(Int(edit.quality)),"-pix_fmt",keepHDR ? "p010le" : "nv12","-fps_mode","passthrough"]
         if edit.codec == .hevc { args += ["-tag:v","hvc1","-profile:v",keepHDR ? "main10" : "main"] }
         if details.hdr && edit.convertToSDR { args += ["-color_primaries","bt709","-color_trc","bt709","-colorspace","bt709"] }
+        if subtitles != nil && !details.hdr && details.colorSpace == 2 && details.width >= 1280 { args += ["-colorspace","bt709"] }
         if !edit.muted && details.audioStreams.indices.contains(edit.audioTrack) {
             args += ["-map","0:\(details.audioStreams[edit.audioTrack])","-af","atrim=start=\(number(absoluteStart)):end=\(number(absoluteEnd)),asetpts=PTS-(\(number(absoluteStart)))/TB","-c:a","aac_at","-b:a","192k","-ac","2"]
         } else { args += ["-an"] }

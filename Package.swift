@@ -11,7 +11,7 @@ let package = Package(
     targets: [
         .target(name: "CMedia", path: "Sources/CMedia", publicHeadersPath: "include",
                 cSettings: [.unsafeFlags(["-I" + vendor + "/include"])],
-                linkerSettings: [.unsafeFlags(["-L" + vendor + "/lib", "-lavformat", "-lavcodec", "-lavutil", "-lswscale", "-lswresample"]),
+                linkerSettings: [.unsafeFlags(["-L" + vendor + "/lib", "-lass", "-lavformat", "-lavcodec", "-lavutil", "-lswscale", "-lswresample"]),
                                  .linkedFramework("AVFoundation"), .linkedFramework("VideoToolbox"), .linkedFramework("CoreImage")]),
         .executableTarget(name: "Clipper", dependencies: ["CMedia"],
                           swiftSettings: [.swiftLanguageMode(.v5)],

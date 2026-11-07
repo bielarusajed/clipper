@@ -1,10 +1,13 @@
 import AppKit
+import Combine
 import AVFoundation
 import SwiftUI
 import UniformTypeIdentifiers
 
 @MainActor final class Editor: ObservableObject {
     let playback=Playback()
+    let subtitles=SubtitleController()
+    private var subtitleChanges:AnyCancellable?
     let urlImporter=URLImport()
     @Published var importPresented=false
     private var temporarySource:TemporaryImport?
@@ -57,9 +60,10 @@ import UniformTypeIdentifiers
     var inTime: Double { start?.time ?? 0 }
     var outTime: Double { min(end?.end ?? details?.duration ?? 0,details?.duration ?? 0) }
     var clipDuration: Double { max(0,outTime-inTime) }
-    var canExport: Bool { source != nil && start != nil && end != nil && clipDuration > 0 && !loading && !playback.seeking && !previewStepRunning && !exporting && !importPresented }
+    var canExport: Bool { source != nil && start != nil && end != nil && clipDuration > 0 && !loading && !playback.seeking && !previewStepRunning && !exporting && !importPresented && subtitles.ready && !(subtitles.enabled && details?.hdr == true && !edit.convertToSDR) }
 
     init() {
+        subtitleChanges=subtitles.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         outputPlayer.actionAtItemEnd = .pause
         outputPlayer.automaticallyWaitsToMinimizeStalling=false
     }
@@ -94,12 +98,15 @@ import UniformTypeIdentifiers
         let previous=temporarySource
         temporarySource=temporary
         defer { if let previous { playback.queue.async { withExtendedLifetime(previous) {} } } }
+        subtitles.reset()
         cancelNudges(); timelineZoom=0
         let id=UUID(); loadingID=id; loading=true
         invalidatePreview(); source=url; start=nil; end=nil; edit=EditSettings(); error=nil; lastExport=nil; nextOutputURL=uniqueOutput(for:url)
         playback.setMuted(false)
         playback.open(url,onFailure:{ [weak self] in self?.loading=false }) { [weak self] in
             guard let self, self.loadingID==id, let info=self.details else { return }
+            self.subtitles.open(url,details:info)
+            self.subtitles.rebuild(details:info,edit:self.edit)
             if info.hdr { self.edit.codec = .hevc }
             self.start=self.playback.frame
             self.playback.seek(max(0,info.duration-0.000001),onFailure:{
@@ -118,6 +125,7 @@ import UniformTypeIdentifiers
     }
     func close() {
         guard !exporting, !urlImporter.busy else { return }
+        subtitles.reset()
         cancelNudges()
         loadingID=UUID(); loading=false
         invalidatePreview(); playback.close()
@@ -212,6 +220,7 @@ import UniformTypeIdentifiers
             playback.open(source,audioTrack:edit.audioTrack,at:t,completion:{ [weak self] in if let duration { self?.playback.details?.duration=duration } })
         }
         playback.setMuted(edit.muted)
+        if let details { subtitles.rebuild(details:details,edit:edit) }
     }
     func invalidatePreview() {
         revision=UUID(); stopPreviewTracking(); previewStatus=nil
@@ -407,7 +416,7 @@ import UniformTypeIdentifiers
         let token=revision
         let temporary=destination.deletingLastPathComponent().appendingPathComponent(".clipper-\(UUID().uuidString).mp4")
         let job=EncoderProcess(); encoder=job
-        let request=ExportRequest(source:source,details:details,edit:edit,start:start,end:end,destination:temporary)
+        let request=ExportRequest(source:source,details:details,edit:edit,start:start,end:end,destination:temporary,subtitles:subtitles.enabled ? subtitles.render : nil)
         exporting=true; progress=0; error=nil; jobLabel=isPreview ? "Rendering preview" : "Exporting clip"
         Task {
             defer {
