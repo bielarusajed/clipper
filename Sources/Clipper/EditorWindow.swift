@@ -48,6 +48,7 @@ struct EditorWindow:NSViewRepresentable {
         private var lastSize=CGSize.zero
         private var fitting=false
         private var scheduled=false
+        private var centerAfterOpen=false
         private var observers:[NSObjectProtocol]=[]
         var onAvailableSize:((CGSize)->Void)?
 
@@ -56,6 +57,7 @@ struct EditorWindow:NSViewRepresentable {
                 size.width.isFinite && size.height.isFinite && size.width>0 && size.height>0 ? size.width/size.height : nil
             }
             guard self.source != source || aspectRatio != ratio else { return }
+            if self.source != source || (source != nil && ratio == nil) { centerAfterOpen=source != nil }
             self.source=source; aspectRatio=ratio
             scheduleFit()
         }
@@ -134,13 +136,14 @@ struct EditorWindow:NSViewRepresentable {
             frame.origin.x += (frame.width-size.width)/2
             frame.origin.y += frame.height-size.height-titleHeight
             frame.size=CGSize(width:size.width,height:size.height+titleHeight)
-            if source == nil {
+            if source == nil || centerAfterOpen {
                 frame.origin=CGPoint(x:visible.midX-frame.width/2,y:visible.midY-frame.height/2)
             }
             frame.origin.x=max(visible.minX,min(frame.origin.x,visible.maxX-frame.width))
             frame.origin.y=max(visible.minY,min(frame.origin.y,visible.maxY-frame.height))
             if window.frame != frame { window.setFrame(frame,display:true) }
             lastSize=window.frame.size
+            if aspectRatio != nil { centerAfterOpen=false }
         }
 
         func stopObserving() {

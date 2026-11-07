@@ -36,8 +36,11 @@ final class EditorWindowTests:XCTestCase {
         XCTAssertEqual(window.frame.midX,starterScreen.midX,accuracy:1)
         XCTAssertEqual(window.frame.midY,starterScreen.midY,accuracy:1)
 
-        editor.source=URL(fileURLWithPath:"/test/video.mp4")
         for size in [CGSize(width:1920,height:1080),CGSize(width:2400,height:1000),CGSize(width:1080,height:1920)] {
+            window.setFrameOrigin(CGPoint(x:starterScreen.minX+80,y:starterScreen.minY+70))
+            editor.source=URL(fileURLWithPath:"/test/video-\(Int(size.width)).mp4")
+            editor.playback.details=nil
+            try await settle()
             editor.playback.details=MediaDetails(duration:5,origin:0,width:Int(size.width),height:Int(size.height),rotation:0,pixelAspect:1,fps:30,hdr:false,codec:"h264",audioLabels:[],audioStreams:[])
             try await settle()
             host.layoutSubtreeIfNeeded()
@@ -49,6 +52,8 @@ final class EditorWindowTests:XCTestCase {
             XCTAssertGreaterThanOrEqual(window.frame.minY,visible.minY-1)
             XCTAssertLessThanOrEqual(window.frame.maxY,visible.maxY+1)
             XCTAssertLessThanOrEqual(window.maxSize.height,visible.height)
+            XCTAssertEqual(window.frame.midX,visible.midX,accuracy:1)
+            XCTAssertEqual(window.frame.midY,visible.midY,accuracy:1,"Opening a video should center its final window size after metadata arrives")
             if size.width>size.height {
                 XCTAssertEqual(window.frame.width,1180,accuracy:1)
             } else {
