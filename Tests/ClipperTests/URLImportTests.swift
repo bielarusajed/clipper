@@ -1,5 +1,6 @@
 import XCTest
 import CMedia
+import Darwin
 @testable import Clipper
 
 final class URLImportTests:XCTestCase {
@@ -38,6 +39,21 @@ final class URLImportTests:XCTestCase {
         XCTAssertNoThrow(try media("\"live_status\":\"post_live\",").validate())
         let audioOnly=try URLMedia.decode(Data("{\"id\":\"audio\",\"title\":\"Audio\",\"formats\":[{\"format_id\":\"a\",\"vcodec\":\"none\",\"acodec\":\"aac\"}]}".utf8))
         XCTAssertThrowsError(try audioOnly.validate())
+    }
+
+    func testUnknownDRMAndMalformedOptionalMetadataDoNotBreakFormats() throws {
+        let info=try URLMedia.decode(Data("""
+        {"id":"test","title":"Example","formats":[
+          {"format_id":"maybe","vcodec":"avc1","acodec":"none","height":720,"has_drm":"maybe","fps":"unknown","filesize":{},"language":false},
+          {"format_id":"clear","vcodec":"avc1","acodec":"aac","has_drm":false},
+          {"format_id":"drm","vcodec":"avc1","acodec":"none","has_drm":true}]}
+        """.utf8))
+        try info.validate()
+        XCTAssertEqual(info.videos.map(\.id),["clear","maybe"])
+        XCTAssertEqual(info.videos.last?.resolutionText,"720p")
+        XCTAssertEqual(info.videos.last?.fpsText,"")
+        XCTAssertEqual(info.videos.last?.sizeText,"")
+        XCTAssertEqual(try info.selector(video:"maybe",audio:"none"),"maybe")
     }
 
     @MainActor func testFormatTableRequiresVideoAndCanRestoreIncludedAudio() throws {
@@ -106,6 +122,22 @@ final class URLImportTests:XCTestCase {
         task.cancel()
         do { _=try await task.value; XCTFail("Cancellation must fail the job") }
         catch is CancellationError { }
+    }
+
+    func testToolDoesNotInheritUnrelatedOpenFiles() async throws {
+        let original=Darwin.open("/dev/null",O_RDONLY)
+        XCTAssertGreaterThanOrEqual(original,0)
+        guard original >= 0 else { return }
+        defer { Darwin.close(original) }
+        let inherited=fcntl(original,F_DUPFD,128)
+        XCTAssertGreaterThanOrEqual(inherited,128)
+        guard inherited >= 128 else { return }
+        defer { Darwin.close(inherited) }
+        XCTAssertEqual(fcntl(inherited,F_SETFD,0),0)
+        let output=try await ImportProcess().run(executable:URL(fileURLWithPath:"/bin/sh"),
+            arguments:["-c","if [ -e /dev/fd/\(inherited) ]; then printf inherited; else printf closed; fi"])
+        XCTAssertEqual(String(decoding:output,as:UTF8.self),"closed")
+        XCTAssertGreaterThanOrEqual(fcntl(inherited,F_GETFD),0,"The app's original descriptor must stay open")
     }
 
     func testCancellationBeforeLaunchAndOutputLimit() async throws {

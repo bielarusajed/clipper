@@ -143,6 +143,30 @@ final class ManagedImportToolsTests:XCTestCase {
         XCTAssertTrue(staging().isEmpty)
     }
 
+    func testFailedLookupCanUpdateBeforeDailyCheckAndRecoveryIsThrottled() async throws {
+        try publishBaseline()
+        _=try await tools().prepare(status:{ _ in })
+        XCTAssertEqual(github.apiRequests,2)
+        let early=try await tools().refreshAfterFailure(status:{ _ in })
+        XCTAssertNil(early)
+        XCTAssertEqual(github.apiRequests,2)
+        clock.advance(hours:2)
+        github.publish("yt-dlp/yt-dlp",tag:"2026.11.01",asset:"yt-dlp_macos",payload:binary)
+        let manager=tools(reported:["yt-dlp":"2026.11.01"])
+        _=try await manager.prepare(status:{ _ in })
+        XCTAssertEqual(github.apiRequests,2,"Ordinary imports still use the daily throttle")
+        async let first=manager.refreshAfterFailure(status:{ _ in })
+        async let second=manager.refreshAfterFailure(status:{ _ in })
+        let recovered=try await [first,second].compactMap { $0 }
+        XCTAssertEqual(recovered.count,1)
+        XCTAssertEqual(recovered.first?.ytDLP.deletingLastPathComponent().lastPathComponent,"2026.11.01")
+        XCTAssertEqual(github.apiRequests,4)
+        // The hourly throttle survives an app restart too.
+        let restarted=try await tools().refreshAfterFailure(status:{ _ in })
+        XCTAssertNil(restarted)
+        XCTAssertEqual(github.apiRequests,4)
+    }
+
     func testFailedUpdateKeepsCurrentWithNotice() async throws {
         try publishBaseline()
         let manager=tools()
@@ -153,6 +177,10 @@ final class ManagedImportToolsTests:XCTestCase {
         XCTAssertTrue(result.notice?.contains("Using 2026.10.26") == true, result.notice ?? "")
         XCTAssertEqual(versions("yt-dlp"),["2026.10.26"])
         XCTAssertEqual((try manifest()["tools"] as? [String:[String:String]])?["yt-dlp"]?["current"],"2026.10.26")
+        let requests=github.apiRequests
+        let cached=try await tools().prepare(status:{ _ in })
+        XCTAssertEqual(cached.notice,result.notice,"Keep the failed-update notice available during the daily throttle, including after restart")
+        XCTAssertEqual(github.apiRequests,requests)
     }
 
     func testVersionMismatchAndForeignBinaryAreRejected() async throws {

@@ -2,9 +2,13 @@ import AppKit
 import AVFoundation
 import SwiftUI
 import UniformTypeIdentifiers
+import Combine
 
 @MainActor final class Editor: ObservableObject {
     let playback=Playback()
+    let waveform=AudioWaveform()
+    @Published var waveformVisible=false
+    private var waveformObservers=Set<AnyCancellable>()
     let urlImporter=URLImport()
     @Published var importPresented=false
     private var temporarySource:TemporaryImport?
@@ -17,7 +21,8 @@ import UniformTypeIdentifiers
     @Published var progress=0.0
     @Published var jobLabel=""
     @Published var error: String?
-    @Published var lastExport: URL?
+    let exportedClip=ExportedClip()
+    var lastExport:URL? { exportedClip.url }
     @Published var previewURL: URL?
     @Published private(set) var previewMode=PreviewMode.original
     @Published private(set) var previewReady=false
@@ -65,6 +70,25 @@ import UniformTypeIdentifiers
         edit=preferences.makeSettings()
         outputPlayer.actionAtItemEnd = .pause
         outputPlayer.automaticallyWaitsToMinimizeStalling=false
+        let changes:[AnyPublisher<Void,Never>]=[
+            $waveformVisible.map { _ in () }.eraseToAnyPublisher(),
+            $loading.map { _ in () }.eraseToAnyPublisher(),
+            $exporting.map { _ in () }.eraseToAnyPublisher(),
+            $previewPlaying.map { _ in () }.eraseToAnyPublisher(),
+            $comparisonPreparing.map { _ in () }.eraseToAnyPublisher(),
+            playback.$playing.map { _ in () }.eraseToAnyPublisher(),
+            playback.$starting.map { _ in () }.eraseToAnyPublisher(),
+            playback.$seeking.map { _ in () }.eraseToAnyPublisher(),
+            playback.$details.map { _ in () }.eraseToAnyPublisher()
+        ]
+        Publishers.MergeMany(changes).receive(on:DispatchQueue.main).sink { [weak self] in self?.refreshWaveform() }.store(in:&waveformObservers)
+    }
+    private func refreshWaveform() {
+        let stream=details.flatMap { $0.audioStreams.indices.contains(edit.audioTrack) ? $0.audioStreams[edit.audioTrack] : nil } ?? -1
+        waveform.update(url:source,stream:stream,origin:details?.origin ?? 0,duration:details?.duration ?? 0,
+                        enabled:waveformVisible && !loading && source != nil,
+                        busy:loading || exporting || playback.playing || playback.starting || playback.seeking || previewPlaying || comparisonPreparing,
+                        lease:temporarySource)
     }
     deinit {
         if let previewObserver { outputPlayer.removeTimeObserver(previewObserver) }
@@ -95,11 +119,12 @@ import UniformTypeIdentifiers
         guard !urlImporter.busy else { error="Finish or cancel the URL import before opening another video."; return }
         guard !exporting else { error="Finish or cancel the current export before opening another video."; return }
         let previous=temporarySource
+        waveform.resetSource()
         temporarySource=temporary
         defer { if let previous { playback.queue.async { withExtendedLifetime(previous) {} } } }
         cancelNudges(); timelineZoom=0
         let id=UUID(); loadingID=id; loading=true
-        invalidatePreview(); source=url; start=nil; end=nil; edit=preferences.makeSettings(); error=nil; lastExport=nil; nextOutputURL=uniqueOutput(for:url)
+        invalidatePreview(); source=url; start=nil; end=nil; edit=preferences.makeSettings(); error=nil; exportedClip.set(nil); nextOutputURL=uniqueOutput(for:url)
         playback.setMuted(false)
         playback.open(url,onFailure:{ [weak self] in self?.loading=false }) { [weak self] in
             guard let self, self.loadingID==id, let info=self.details else { return }
@@ -122,15 +147,17 @@ import UniformTypeIdentifiers
     func close() {
         guard !exporting, !urlImporter.busy else { return }
         cancelNudges()
+        waveform.resetSource()
         loadingID=UUID(); loading=false
         invalidatePreview(); playback.close()
         let previous=temporarySource; temporarySource=nil
         if let previous { playback.queue.async { withExtendedLifetime(previous) {} } }
-        source=nil; start=nil; end=nil; edit=preferences.makeSettings(); lastExport=nil; nextOutputURL=nil; error=nil
+        source=nil; start=nil; end=nil; edit=preferences.makeSettings(); exportedClip.set(nil); nextOutputURL=nil; error=nil
     }
     func prepareToQuit() {
         let download=temporarySource
         close()
+        waveform.cancelAndWait()
         download?.dispose()
     }
     func nudgeBoundary(start:Bool,direction:Int) {
@@ -227,11 +254,13 @@ import UniformTypeIdentifiers
         }
         if details?.hdr == true && !edit.convertToSDR { edit.codec = .hevc }
         if edit.audioTrack != previous.audioTrack, let source {
+            waveform.cancel()
             let t=playback.position
             let duration=details?.duration
             playback.open(source,audioTrack:edit.audioTrack,at:t,completion:{ [weak self] in if let duration { self?.playback.details?.duration=duration } })
         }
         playback.setMuted(edit.muted)
+        refreshWaveform()
     }
     func invalidatePreview() {
         revision=UUID(); stopPreviewTracking(); previewStatus=nil
@@ -396,7 +425,7 @@ import UniformTypeIdentifiers
             let panel=NSSavePanel(); panel.allowedContentTypes=[.mpeg4Movie]; panel.nameFieldStringValue=destination.lastPathComponent
             panel.directoryURL=destination.deletingLastPathComponent()
             panel.canCreateDirectories=true
-            let validator=ExportSavePanelValidator(source:source)
+            let validator=ExportSavePanelValidator(source:source,managedDirectories:managedExportDirectories)
             panel.delegate=validator
             guard withExtendedLifetime(validator,{ panel.runModal() }) == .OK, let url=panel.url else { return }; destination=url
             preferences.recordSaveDirectory(from:destination)
@@ -406,12 +435,12 @@ import UniformTypeIdentifiers
     }
     func export(to destination:URL,replacingExisting:Bool) {
         guard canExport, let source else { return }
-        do { try ExportDestination.validate(source:source,destination:destination) }
+        do { try ExportDestination.validate(source:source,destination:destination,managedDirectories:managedExportDirectories) }
         catch { self.error=error.localizedDescription; return }
         encode(destination:destination,start:inTime,end:outTime,isPreview:false,replacingExisting:replacingExisting)
     }
     func uniqueOutput(for source: URL) -> URL {
-        let parent=temporarySource?.file == source
+        let parent=temporarySource?.file == source || ExportDestination.isInManagedDirectory(source)
             ? preferences.resolvedSaveDirectory()
             : source.deletingLastPathComponent()
         return uniqueOutput(for:source,in:parent)
@@ -442,24 +471,28 @@ import UniformTypeIdentifiers
             do {
                 try await job.run(request) { value in Task { @MainActor in self.progress=value } }
                 if isPreview && token != revision { return }
-                try ExportDestination.publish(temporary,to:destination,source:source,replacingExisting:replacingExisting)
+                try ExportDestination.publish(temporary,to:destination,source:source,replacingExisting:replacingExisting,managedDirectories:managedExportDirectories)
                 if isPreview {
                     if let old=previewURL { try? FileManager.default.removeItem(at:old) }
                     previewStart=start; previewDuration=end-start; previewURL=destination; installPreview(destination)
-                } else { lastExport=destination; nextOutputURL=uniqueOutput(for:source) }
+                } else { exportedClip.set(destination); nextOutputURL=uniqueOutput(for:source) }
             } catch ExportFailure.cancelled { }
             catch { self.error=error.localizedDescription }
         }
     }
     func cancel() { encoder?.cancel() }
-    func cancelAndQuit() { quitAfterExport=true; encoder?.cancel() }
-    func revealExport() { if let lastExport { NSWorkspace.shared.activateFileViewerSelecting([lastExport]) } }
+    func cancelAndQuit() {
+        if exporting { quitAfterExport=true; encoder?.cancel() }
+        else { prepareToQuit(); NSApp.reply(toApplicationShouldTerminate:true) }
+    }
+    private var managedExportDirectories:[URL] { [TemporaryImport.root]+(temporarySource.map { [$0.directory] } ?? []) }
 }
 
 @MainActor final class ExportSavePanelValidator:NSObject,NSOpenSavePanelDelegate {
     let source:URL
-    init(source:URL) { self.source=source }
+    let managedDirectories:[URL]
+    init(source:URL,managedDirectories:[URL]=[TemporaryImport.root]) { self.source=source; self.managedDirectories=managedDirectories }
     func panel(_ sender:Any,validate url:URL) throws {
-        try ExportDestination.validate(source:source,destination:url)
+        try ExportDestination.validate(source:source,destination:url,managedDirectories:managedDirectories)
     }
 }

@@ -31,6 +31,9 @@ import AppKit
                 Button("Set End Here") { editor.markEnd() }.disabled(editor.exporting || editor.loading)
             }
             CommandGroup(after:.toolbar) {
+                Toggle("Show Audio Waveform",isOn:$editor.waveformVisible)
+                    .disabled(editor.source == nil || (editor.details?.audioLabels.isEmpty ?? true))
+                Divider()
                 Button("Zoom Timeline In") { editor.zoomTimeline(by:0.5) }.keyboardShortcut("=").disabled(editor.source == nil)
                 Button("Fit Timeline") { editor.timelineZoom=0 }.keyboardShortcut("0").disabled(editor.source == nil)
                 Button("Zoom Timeline Out") { editor.zoomTimeline(by:-0.5) }.keyboardShortcut("-").disabled(editor.source == nil)
@@ -43,6 +46,7 @@ import AppKit
     var pending: [URL]=[]
     private var keyMonitor: Any?
     func applicationDidFinishLaunching(_ notification: Notification) {
+        ImportWorkspace.removeAbandoned()
         NSApp.setActivationPolicy(.regular); NSApp.activate(ignoringOtherApps:true)
         keyMonitor=NSEvent.addLocalMonitorForEvents(matching:.keyDown) { [weak self] event in
             if let editor=self?.editor, !editor.importPresented, editor.source != nil, !(NSApp.keyWindow is NSPanel),
@@ -75,17 +79,20 @@ import AppKit
     func deliverPending() { if let url=pending.first { pending=[]; editor?.open(url) } }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender:NSApplication) -> Bool { true }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        if editor?.urlImporter.busy == true {
-            let alert=NSAlert(); alert.messageText="Cancel the URL import and quit?"
-            alert.addButton(withTitle:"Keep Importing"); alert.addButton(withTitle:"Cancel and Quit")
-            if alert.runModal() == .alertFirstButtonReturn { return .terminateCancel }
-            Task { await editor?.urlImporter.cancelAndWait(); editor?.prepareToQuit(); NSApp.reply(toApplicationShouldTerminate:true) }
-            return .terminateLater
-        }
-        if editor?.exporting == true {
+        if let editor, editor.exporting {
             let alert=NSAlert(); alert.messageText="Cancel the export and quit?"; alert.addButton(withTitle:"Keep Exporting"); alert.addButton(withTitle:"Cancel and Quit")
             if alert.runModal() == .alertFirstButtonReturn { return .terminateCancel }
-            editor?.cancelAndQuit()
+            editor.cancel()
+            Task { await editor.urlImporter.cancelAndWait(); editor.cancelAndQuit() }
+            return .terminateLater
+        }
+        if editor?.urlImporter.hasPendingWork == true {
+            if editor?.urlImporter.busy == true {
+                let alert=NSAlert(); alert.messageText="Cancel the URL import and quit?"
+                alert.addButton(withTitle:"Keep Importing"); alert.addButton(withTitle:"Cancel and Quit")
+                if alert.runModal() == .alertFirstButtonReturn { return .terminateCancel }
+            }
+            Task { await editor?.urlImporter.cancelAndWait(); editor?.prepareToQuit(); NSApp.reply(toApplicationShouldTerminate:true) }
             return .terminateLater
         }
         editor?.prepareToQuit(); return .terminateNow
