@@ -38,9 +38,8 @@ codesign --force --sign - "$APP/Contents/Helpers/ffprobe"
 codesign --force --sign - "$APP"
 codesign --verify --deep --strict "$APP"
 mkdir -p "$ROOT/dist"
-if [[ -d "$ROOT/dist/Clipper.app" ]]; then
-  mv "$ROOT/dist/Clipper.app" "$ROOT/.build/previous-app-$(uuidgen).app"
-fi
+python3 scripts/retire-build-apps.py --include-current
 mv "$APP" "$ROOT/dist/Clipper.app"
 rmdir "$STAGING"
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$ROOT/dist/Clipper.app"
 echo "$ROOT/dist/Clipper.app"

@@ -10,6 +10,8 @@ The initial full run executed 175 tests, with five opt-in network checks skipped
 
 The separate loopback TLS check passed. It confirms that the shipped FFmpeg rejects an untrusted self-signed peer without extra verification flags and without changing system trust.
 
+Open With cleanup was checked against the actual Launch Services database. Nine registered archived builds were removed, and all 40 existing backups were preserved as ordinary folders without an application suffix. macOS reports the retired copy as `public.folder`, not an application. A rebuild introduced no archived handler, kept the installed/current Clipper registrations and passed signature verification. The cleanup also passed a second, idle run.
+
 Commands and local evidence:
 
 ```sh

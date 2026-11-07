@@ -2,6 +2,7 @@
 
 ## 0.5.0 · 7 November 2026
 
+- Archived builds no longer accumulate in Finder's Open With menu. Builds unregister old copies and keep their contents in folders without the `.app` suffix.
 - Undo and redo for trim, framing and export settings, with one entry per completed gesture and native text-field undo.
 - Selection looping with a prewarmed decoder, plus a last-second cut audition that holds the final included frame.
 - Copy and drag completed exports into other apps, alongside Show in Finder.

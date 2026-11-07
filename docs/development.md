@@ -14,6 +14,8 @@ The first build downloads FFmpeg 8.0.1, dav1d 1.5.4, zimg 3.0.6, libass 0.17.3, 
 
 The scripts compile with SwiftPM, assemble `dist/Clipper.app`, bundle the transitive private dylib graph, strip build-machine load paths, copy licenses and ad-hoc sign the app. A fresh staging bundle replaces the previous one; the previous bundle moves under `.build/`. Open the new app after quitting an older running copy. No Homebrew libraries or external executables are needed at runtime.
 
+Old builds are unregistered from Launch Services and stored as `previous-app-<id>.app-backup` folders, with their contents intact. This keeps them out of Finder's Open With menu. Builds also retire older `.app` backups left by previous scripts. To clean those registrations without rebuilding, run `python3 scripts/retire-build-apps.py`. Rename a backup to end in `.app` if it needs to be run again.
+
 Use private `.build/media` and `.build/vendor` directories when rebuilding dependencies in a worktree. The media builder rejects shared dependency symlinks.
 
 ## Run tests
