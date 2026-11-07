@@ -295,6 +295,16 @@ struct EditorView:View {
                 Text(TimeText.format(editor.displayedPosition)).font(.system(size:12,weight:.semibold).monospacedDigit()).foregroundStyle(C1.ink).padding(.leading,3)
                 if playback.seeking { ProgressView().controlSize(.mini) }
                 Spacer()
+                Button { editor.toggleLoop() } label: {
+                    Image(systemName:"repeat").frame(width:24,height:24)
+                        .foregroundStyle(editor.loopEnabled ? C1.blue : C1.secondary)
+                        .background(editor.loopEnabled ? C1.blue.opacity(0.12) : .clear,in:RoundedRectangle(cornerRadius:5))
+                }.help(editor.previewMode == .original ? "Loop selection (⌘L)" : "Loop encoded sample (⌘L)")
+                    .accessibilityLabel("Loop selection").accessibilityValue(editor.loopEnabled ? "On" : "Off")
+                Button { editor.auditionCut() } label: {
+                    Image(systemName:"play.end").frame(width:24,height:24)
+                        .foregroundStyle(editor.auditioning && editor.isPlaying ? C1.blue : C1.secondary)
+                }.help(editor.auditionHelp).accessibilityLabel("Audition cut").disabled(!editor.canAudition)
             }.buttonStyle(.borderless).font(.system(size:11)).foregroundStyle(C1.secondary).frame(height:EditorWindowLayout.transportHeight)
             Timeline(editor:editor,playback:playback).frame(height:EditorWindowLayout.timelineHeight)
 

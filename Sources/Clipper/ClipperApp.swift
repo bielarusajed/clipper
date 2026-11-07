@@ -23,9 +23,13 @@ import AppKit
                 Button("Export Clip As…") { editor.export(saveAs:true) }.keyboardShortcut("e",modifiers:[.command,.shift]).disabled(!editor.canExport)
             }
             CommandMenu("Playback") {
-                Button("Play / Pause") { editor.togglePlayback() }.disabled(editor.loading)
+                Button("Play / Pause") { editor.togglePlayback() }.disabled(!editor.canAudition)
                 Button("Previous Frame") { editor.stepFrame(-1) }.disabled(editor.loading)
                 Button("Next Frame") { editor.stepFrame(1) }.disabled(editor.loading)
+                Toggle("Loop Selection",isOn:Binding(get:{editor.loopEnabled},set:{ _ in editor.toggleLoop() }))
+                    .keyboardShortcut("l").disabled(!editor.canAudition)
+                Button("Audition Cut") { editor.auditionCut() }
+                    .keyboardShortcut("l",modifiers:[.command,.shift]).disabled(!editor.canAudition)
                 Divider()
                 Button("Set Start Here") { editor.markStart() }.disabled(editor.exporting || editor.loading)
                 Button("Set End Here") { editor.markEnd() }.disabled(editor.exporting || editor.loading)

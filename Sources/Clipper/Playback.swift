@@ -6,7 +6,7 @@ import CoreImage
 
 final class Playback: ObservableObject {
     let video:AVSampleBufferDisplayLayer
-    let audio = AVSampleBufferAudioRenderer()
+    let audio:AVSampleBufferAudioRenderer
     let clock = AVSampleBufferRenderSynchronizer()
     let queue = DispatchQueue(label:"clipper.decode",qos:.userInteractive)
     private var media: OpaquePointer?
@@ -43,9 +43,20 @@ final class Playback: ObservableObject {
     @Published var seeking = false
     @Published var error: String?
     var endTime = Double.infinity
+    @Published private(set) var transportWanted=false
+    private var runID=UUID()
+    private var boundaryObserver:Any?
+    private var decodeEnd=Double.infinity
+    // Demux/decode order can deliver audio past the cut before the final B-frames.
+    private var videoPastCut=false
+    private var audioPastCut=false
+    private var runEnd=Double.infinity
+    private var runStart=0.0
+    private var shouldLoop:(() -> Bool)?
+    private var runCompletion:(() -> Void)?
 
-    init(video:AVSampleBufferDisplayLayer=AVSampleBufferDisplayLayer()) {
-        self.video=video
+    init(video:AVSampleBufferDisplayLayer=AVSampleBufferDisplayLayer(),audio:AVSampleBufferAudioRenderer=AVSampleBufferAudioRenderer()) {
+        self.video=video; self.audio=audio
         video.videoGravity = .resize
         clock.addRenderer(video)
         clock.addRenderer(audio)
@@ -54,14 +65,14 @@ final class Playback: ObservableObject {
             guard let self, self.playing else { return }
             let t = time.seconds
             self.position = max(0,t)
-            if t >= min(self.endTime,self.details?.duration ?? .infinity) { self.seek(max(0,min(self.endTime,self.details?.duration ?? t)-0.000002)) }
+            // The range observer stops the clock; the decoder enforces the exclusive cut.
         }
         let t = DispatchSource.makeTimerSource(queue:queue)
         t.schedule(deadline:.now(),repeating:.milliseconds(15))
         t.setEventHandler { [weak self] in self?.pump() }
         t.resume(); timer=t
     }
-    deinit { timer?.cancel(); if let observer { clock.removeTimeObserver(observer) }; if let media { clip_close(media) }; clip_request_free(cancellation) }
+    deinit { if let boundaryObserver { clock.removeTimeObserver(boundaryObserver) }; timer?.cancel(); if let observer { clock.removeTimeObserver(observer) }; if let media { clip_close(media) }; clip_request_free(cancellation) }
     private func nextGeneration() -> Int {
         requestLock.lock(); defer { requestLock.unlock() }
         latestRequest += 1; clip_request_set(cancellation,Int32(truncatingIfNeeded:latestRequest)); return latestRequest
@@ -103,17 +114,22 @@ final class Playback: ObservableObject {
         }
     }
     func seek(_ requested: Double, onFailure: (() -> Void)? = nil, completion: (() -> Void)? = nil) {
-        if warmTransport, !playing, !seeking, let frame, requested>=frame.time-0.0000001, requested<frame.end-0.0000001 {
+        cancelRun()
+        seekFrame(requested,onFailure:onFailure,completion:completion)
+    }
+    private func seekFrame(_ requested:Double,skipBackdrop:Bool=false,forcePresent:Bool=false,onFailure:(() -> Void)?=nil,completion:(() -> Void)?=nil) {
+        if !forcePresent, warmTransport, !playing, !seeking, let frame, requested>=frame.time-0.0000001, requested<frame.end-0.0000001 {
             completion?(); runNextAction(); return
         }
         stopChasing()
-        pause(); warmTransport=false; starting=false; seeking=true
+        pauseRenderer(); warmTransport=false; starting=false; seeking=true
         let token=nextGeneration()
         let backdropSource=currentBackdropGeneration()
         let target=max(0,min(requested,max(0,(details?.duration ?? requested)-0.000001)))
         queue.async { [weak self] in
             guard let self, self.isCurrent(token), let m=self.media else { return }
             self.running=false; self.primeToken=nil; self.generation=token
+            self.videoPastCut=false; self.audioPastCut=false
             if let pending=self.pending, let sample=pending.sample { sample.release() }; self.pending=nil
             let frame=clip_frame_cancellable(m,target,self.cancellation,Int32(truncatingIfNeeded:token))
             guard frame.kind == 1, let unmanaged=frame.sample else {
@@ -122,7 +138,7 @@ final class Playback: ObservableObject {
             let sample=unmanaged.takeRetainedValue()
             let point=FramePoint(time:frame.time,duration:frame.duration,pts:frame.pts,timeBaseNum:frame.timeBaseNum,timeBaseDen:frame.timeBaseDen)
             var backdropPixel:CVPixelBuffer?
-            if self.isCurrent(token), !self.backdropTime.isFinite || abs(self.backdropTime-frame.time)>2,
+            if !skipBackdrop, self.isCurrent(token), !self.backdropTime.isFinite || abs(self.backdropTime-frame.time)>2,
                let pixel=CMSampleBufferGetImageBuffer(sample) {
                 backdropPixel=pixel; self.backdropTime=frame.time
             }
@@ -175,6 +191,7 @@ final class Playback: ObservableObject {
     /// Only the latest waiting target is retained; normal editing seeks remain separate.
     func chase(_ time:Double,completion:(() -> Void)?=nil) {
         guard details != nil else { return }
+        cancelRun()
         warmTransport=false; starting=false
         chaseTarget=ChaseRequest(time:time,completion:completion)
         startNextChase()
@@ -212,6 +229,7 @@ final class Playback: ObservableObject {
         }
     }
     func step(_ direction: Int,onFailure:(() -> Void)?=nil,completion:(() -> Void)?=nil) {
+        cancelRun()
         if seeking { deferredActions.append { [weak self] in self?.step(direction,onFailure:onFailure,completion:completion) }; return }
         if playing { let t=position; seek(t,onFailure:onFailure) { self.step(direction,onFailure:onFailure,completion:completion) }; return }
         guard let frame else { return }
@@ -228,8 +246,60 @@ final class Playback: ObservableObject {
         deferredActions.removeFirst()()
         if !seeking { runNextAction() }
     }
+    /// All source playback is bounded. The pump clips samples before the clock reaches the cut.
     func play() {
-        if seeking { playing=true; afterPendingSeeks { [weak self] in if self?.playing == true { self?.play() } }; return }
+        playRange(until:min(endTime,details?.duration ?? .infinity),loopStart:0,shouldLoop:{ false })
+    }
+    func playRange(from:Double?=nil,until:Double,loopStart:Double,shouldLoop:@escaping () -> Bool,onEnd:(() -> Void)?=nil) {
+        pause()
+        guard details != nil, until.isFinite else { return }
+        let id=runID
+        runEnd=until; runStart=loopStart; self.shouldLoop=shouldLoop; runCompletion=onEnd
+        requestLock.withLock { decodeEnd=until }
+        transportWanted=true
+        let ready={ [weak self] in
+            guard let self, self.runID==id, self.transportWanted else { return }
+            self.armBoundary(id); self.playRenderer()
+        }
+        if let from { seekFrame(from,skipBackdrop:true,forcePresent:true,onFailure:{ [weak self] in self?.failRun() },completion:ready) }
+        else { afterPendingSeeks(ready) }
+    }
+    private func cancelRun() {
+        runID=UUID(); transportWanted=false; shouldLoop=nil; runCompletion=nil
+        if let boundaryObserver { clock.removeTimeObserver(boundaryObserver); self.boundaryObserver=nil }
+    }
+    private func armBoundary(_ id:UUID) {
+        if let boundaryObserver { clock.removeTimeObserver(boundaryObserver) }
+        boundaryObserver=clock.addBoundaryTimeObserver(forTimes:[NSValue(time:CMTime(seconds:runEnd,preferredTimescale:1000000))],queue:.main) { [weak self] in
+            guard let self, self.runID==id, self.transportWanted else { return }
+            self.finishRange(id)
+        }
+    }
+    private func finishRange(_ id:UUID) {
+        if let boundaryObserver { clock.removeTimeObserver(boundaryObserver); self.boundaryObserver=nil }
+        pauseRenderer()
+        if shouldLoop?() == true {
+            seekFrame(runStart,skipBackdrop:true,forcePresent:true,onFailure:{ [weak self] in self?.failRun() }) { [weak self] in
+                guard let self, self.runID==id, self.transportWanted else { return }
+                self.armBoundary(id); self.playRenderer()
+            }
+        } else {
+            transportWanted=false
+            let completion=runCompletion
+            seekFrame(max(0,runEnd-0.000002),skipBackdrop:true,onFailure:{ [weak self] in
+                guard let self, self.runID==id else { return }
+                self.cancelRun(); completion?()
+            },completion:{ [weak self] in
+                guard let self, self.runID==id else { return }
+                self.cancelRun(); completion?()
+            })
+        }
+    }
+    private func failRun() {
+        let completion=runCompletion
+        pause(); completion?()
+    }
+    private func playRenderer() {
         guard details != nil else { return }
         playing=true
         if starting { return }
@@ -247,15 +317,17 @@ final class Playback: ObservableObject {
             if let p=self.pending, let b=p.sample { b.release() }; self.pending=nil
             self.requestLock.withLock { self.frameTimes=[] }
             if clip_resume(m,start)==0 && clip_seek(m,start)<0 {
-                DispatchQueue.main.async { if self.isCurrent(token) { self.starting=false; self.playing=false; self.error="Could not start playback here." } }
+                DispatchQueue.main.async { if self.isCurrent(token) { self.error="Could not start playback here."; self.failRun() } }
                 return
             }
             self.decodeFloor=start; self.generation=token; self.running=true
+            self.videoPastCut=false; self.audioPastCut=false
             self.primeToken=token; self.primedVideo=false; self.primedAudioEnd = .nan
             self.pump()
         }
     }
-    func pause() {
+    func pause() { cancelRun(); pauseRenderer() }
+    private func pauseRenderer() {
         if starting { starting=false; _=nextGeneration() }
         clock.setRate(0,time:.invalid)
         let time=clock.currentTime().seconds
@@ -266,7 +338,7 @@ final class Playback: ObservableObject {
         playing=false
         queue.async { [weak self] in self?.running=false }
     }
-    func toggle() { playing ? pauseAndResolve() : play() }
+    func toggle() { transportWanted ? pauseAndResolve() : play() }
     func pauseAndResolve() { pause() }
     func setMuted(_ muted: Bool) { audio.isMuted=muted }
     private func pump() {
@@ -280,15 +352,28 @@ final class Playback: ObservableObject {
                 running=false
                 if let token=primeToken, !primedVideo {
                     primeToken=nil
-                    DispatchQueue.main.async { if self.isCurrent(token) { self.starting=false; self.playing=false } }
+                    DispatchQueue.main.async { if self.isCurrent(token) { self.failRun() } }
                 }
-                if sample.kind == -1 { DispatchQueue.main.async { self.error="Playback decoding failed."; self.pause() } }
+                if sample.kind == -1 {
+                    let token=generation
+                    DispatchQueue.main.async { if self.isCurrent(token) { self.error="Playback decoding failed."; self.failRun() } }
+                }
                 finishPrimingIfReady(at:now,atEnd:true)
                 return
             }
             guard let unmanaged=sample.sample else { continue }
             guard isCurrent(generation) else { unmanaged.release(); running=false; return }
             if sample.time < decodeFloor-0.000001 { unmanaged.release(); continue }
+            let cutoff=requestLock.withLock { decodeEnd }
+            if sample.time >= cutoff-0.0000001 {
+                let noAudio=clip_info(m).audioCount==0
+                if sample.kind == 1 { videoPastCut=true } else { audioPastCut=true }
+                // Each stream is ordered, but streams need not cross the cut together.
+                if (videoPastCut && (audioPastCut || noAudio)) || sample.time > cutoff+1 {
+                    pending=sample; finishPrimingIfReady(at:now,atEnd:true); return
+                }
+                unmanaged.release(); continue
+            }
             if sample.time > now+0.3 || (sample.kind == 1 && !video.isReadyForMoreMediaData) || (sample.kind == 2 && !audio.isReadyForMoreMediaData) {
                 pending=sample; finishPrimingIfReady(at:now,atEnd:true); return
             }
@@ -298,7 +383,18 @@ final class Playback: ObservableObject {
                 video.enqueue(buffer); primedVideo=true
                 let point=FramePoint(time:sample.time,duration:sample.duration,pts:sample.pts,timeBaseNum:sample.timeBaseNum,timeBaseDen:sample.timeBaseDen)
                 requestLock.withLock { frameTimes.append(point); if frameTimes.count>96 { frameTimes.removeFirst(frameTimes.count-96) } }
-            } else { audio.enqueue(buffer); primedAudioEnd=sample.time+sample.duration }
+            } else {
+                var audible=buffer
+                if sample.time+sample.duration > cutoff {
+                    let count=CMSampleBufferGetNumSamples(buffer)
+                    let keep=min(count,max(0,Int(floor((cutoff-sample.time)*48000+0.00001))))
+                    var trimmed:CMSampleBuffer?
+                    if keep>0, CMSampleBufferCopySampleBufferForRange(allocator:kCFAllocatorDefault,sampleBuffer:buffer,sampleRange:CFRange(location:0,length:keep),sampleBufferOut:&trimmed)==noErr, let trimmed { audible=trimmed }
+                    else { finishPrimingIfReady(at:now,atEnd:true); continue }
+                }
+                audio.enqueue(audible); primedAudioEnd=min(cutoff,sample.time+sample.duration)
+                if primedAudioEnd >= cutoff-0.00003 { finishPrimingIfReady(at:now,atEnd:true) }
+            }
             finishPrimingIfReady(at:now)
         }
     }
