@@ -271,7 +271,7 @@ struct EditorView:View {
                         Spacer(minLength:4)
                         Picker("Audio track",selection:setting(\.audioTrack,"Audio Track")) {
                             ForEach(details.audioLabels.indices,id:\.self) { Text(details.audioLabels[$0]).tag($0) }
-                        }.labelsHidden().fixedSize().frame(maxWidth:170,alignment:.trailing)
+                        }.labelsHidden().fixedSize().frame(maxWidth:170,alignment:.trailing).disabled(playback.seeking)
                     }.font(.system(size:12)).controlSize(.small).padding(.horizontal,10).frame(height:35)
                     rowDivider
                 }

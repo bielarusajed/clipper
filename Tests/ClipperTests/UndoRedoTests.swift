@@ -200,6 +200,31 @@ final class UndoRedoTests:XCTestCase {
         editor.redoEdit(); try await ready(editor)
         XCTAssertEqual(editor.edit.audioTrack,1); XCTAssertEqual(editor.playback.endTime,editor.outTime)
     }
+    @MainActor func testAudioTrackChangeWaitsForPendingMark() async throws {
+        let output=fixture("undo-pending-audio-\(UUID().uuidString).mkv")
+        defer { try? FileManager.default.removeItem(at:output) }
+        let process=Process()
+        process.executableURL=fixture().deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("media/bin/ffmpeg")
+        process.arguments=["-v","error","-i",fixture().path,"-map","0:v","-map","0:a","-map","0:a","-c","copy",output.path]
+        try process.run(); process.waitUntilExit(); XCTAssertEqual(process.terminationStatus,0)
+        let editor=Editor(); editor.open(output); try await ready(editor)
+        defer { editor.close() }
+        editor.seek(1.0005); try await ready(editor)
+        let expected=try XCTUnwrap(editor.playback.frame)
+        editor.seek(0); try await ready(editor)
+        editor.markStart(1)
+        editor.updateSettings("Audio Track") { $0.audioTrack=1 }
+        XCTAssertEqual(editor.edit.audioTrack,0,"The track control is frozen while decoding")
+        try await ready(editor)
+        XCTAssertEqual(editor.start,expected)
+        editor.updateSettings("Audio Track") { $0.audioTrack=1 }
+        try await ready(editor)
+        XCTAssertEqual(editor.edit.audioTrack,1)
+        editor.undoEdit(); try await ready(editor)
+        XCTAssertEqual(editor.edit.audioTrack,0); XCTAssertEqual(editor.start,expected)
+        editor.undoEdit(); try await ready(editor)
+        XCTAssertLessThan(editor.inTime,0.1); XCTAssertFalse(editor.canUndo)
+    }
     @MainActor func testCommandsKeepNativeTextUndoSeparateFromClipHistory() async throws {
         _=NSApplication.shared
         let editor=try await opened(); defer { editor.close() }

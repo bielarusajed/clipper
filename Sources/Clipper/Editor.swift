@@ -152,6 +152,8 @@ import UniformTypeIdentifiers
         let before=snapshot
         var next=edit; mutate(&next)
         next.normalize(previous:edit,details:details)
+        // Reopening audio would cancel a trim mark still resolving in the decoder.
+        if playback.seeking { next.audioTrack=edit.audioTrack }
         guard next != edit else { return }
         cancelNudges(); invalidatePreview()
         edit=next
@@ -173,8 +175,8 @@ import UniformTypeIdentifiers
         outputPlayer.actionAtItemEnd = .pause
         outputPlayer.automaticallyWaitsToMinimizeStalling=false
         // Menu availability also depends on the decoder and importer state.
-        playback.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }.store(in:&historyObservers)
-        urlImporter.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }.store(in:&historyObservers)
+        playback.$seeking.removeDuplicates().sink { [weak self] _ in self?.objectWillChange.send() }.store(in:&historyObservers)
+        urlImporter.$busy.removeDuplicates().sink { [weak self] _ in self?.objectWillChange.send() }.store(in:&historyObservers)
     }
     deinit {
         if let previewObserver { outputPlayer.removeTimeObserver(previewObserver) }
