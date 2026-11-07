@@ -183,6 +183,7 @@ import UniformTypeIdentifiers
             else { error="The end must be after the start of the clip." }
         }
         refreshBoundary(start:start)
+        if loopEnabled { playback.prepareLoop(start:inTime) }
     }
     private func refreshBoundary(start:Bool) { lastBoundaryIsStart=start; boundaryRevision += 1 }
     func seek(_ time: Double) { guard !loading else { return }; interruptTransport(); cancelNudges(); returnToOriginal(); playback.clearQueuedActions(); playback.seek(time) }
@@ -239,7 +240,12 @@ import UniformTypeIdentifiers
     }
     func returnToOriginal() { if previewMode != .original { switchPreviewMode(.original) } }
     /// Loop is a preference for the current source; changing it never starts transport.
-    func toggleLoop() { guard canAudition else { return }; loopEnabled.toggle() }
+    func toggleLoop() {
+        guard canAudition else { return }
+        loopEnabled.toggle()
+        if previewMode == .original && !auditioning { playback.setLooping(loopEnabled) }
+        if loopEnabled { playback.prepareLoop(start:inTime) }
+    }
     private func interruptTransport(cancelSteps:Bool=true) {
         transportOperation=UUID(); auditioning=false
         playback.pause()
@@ -258,7 +264,7 @@ import UniformTypeIdentifiers
         interruptTransport(); auditioning=true
         let operation=transportOperation
         if previewMode == .original {
-            playback.playRange(from:max(inTime,outTime-1),until:outTime,loopStart:inTime,shouldLoop:{ false },onEnd:{ [weak self] in
+            playback.playRange(from:max(inTime,outTime-1),until:outTime,loopStart:inTime,looping:false,onEnd:{ [weak self] in
                 guard self?.transportOperation==operation else { return }; self?.auditioning=false
             })
         } else {
@@ -287,7 +293,7 @@ import UniformTypeIdentifiers
         } else {
             let atEnd=(playback.frame?.end ?? playback.position) >= outTime-0.000001
             let outside=playback.position<inTime || playback.position>=outTime
-            playback.playRange(from:atEnd || outside ? inTime : nil,until:outTime,loopStart:inTime,shouldLoop:{ [weak self] in self?.loopEnabled == true })
+            playback.playRange(from:atEnd || outside ? inTime : nil,until:outTime,loopStart:inTime,looping:loopEnabled)
         }
     }
     func switchPreview(_ output: Bool) {

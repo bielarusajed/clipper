@@ -29,9 +29,19 @@ final class LoopAuditionTests:XCTestCase {
         private let lock=NSLock()
         nonisolated(unsafe) private var times:[Double]=[]
         var imageRemovals=0
+        nonisolated(unsafe) private var flushes=0
+        var flushCount:Int { lock.withLock { flushes } }
+        nonisolated override func flush() { lock.withLock { flushes += 1 }; super.flush() }
+        nonisolated(unsafe) var renderClock:AVSampleBufferRenderSynchronizer?
+        nonisolated(unsafe) private var lead:[(Double,Double)]=[]
+        var enqueueLead:[(Double,Double)] { lock.withLock { lead } }
         var timestamps:[Double] { lock.withLock { times } }
         nonisolated override func enqueue(_ buffer:CMSampleBuffer) {
-            lock.withLock { times.append(CMSampleBufferGetPresentationTimeStamp(buffer).seconds) }
+            lock.withLock {
+                let time=CMSampleBufferGetPresentationTimeStamp(buffer).seconds
+                times.append(time)
+                if let renderClock, renderClock.rate>0 { lead.append((time,time-renderClock.currentTime().seconds)) }
+            }
             super.enqueue(buffer)
         }
         override func flushAndRemoveImage() { imageRemovals += 1; super.flushAndRemoveImage() }
@@ -39,10 +49,23 @@ final class LoopAuditionTests:XCTestCase {
     private final class AudioSamples:AVSampleBufferAudioRenderer {
         private let lock=NSLock()
         nonisolated(unsafe) private var ends:[Double]=[]
+        nonisolated(unsafe) private var starts:[Double]=[]
+        var startTimes:[Double] { lock.withLock { starts } }
         var endTimes:[Double] { lock.withLock { ends } }
         nonisolated override func enqueue(_ buffer:CMSampleBuffer) {
-            lock.withLock { ends.append((CMSampleBufferGetPresentationTimeStamp(buffer)+CMSampleBufferGetDuration(buffer)).seconds) }
+            lock.withLock {
+                starts.append(CMSampleBufferGetPresentationTimeStamp(buffer).seconds)
+                ends.append((CMSampleBufferGetPresentationTimeStamp(buffer)+CMSampleBufferGetDuration(buffer)).seconds)
+            }
             super.enqueue(buffer)
+        }
+    }
+    private final class RateHistory {
+        private let lock=NSLock()
+        private var recorded:[Float]=[]
+        var rates:[Float] { lock.withLock { recorded } }
+        func observe(_ clock:AVSampleBufferRenderSynchronizer)->NSKeyValueObservation {
+            clock.observe(\.rate,options:[.initial,.new]) { [self] clock,_ in lock.withLock { recorded.append(clock.rate) } }
         }
     }
     @MainActor func testDecoderEnforcesExclusiveCutForVideoAndAudioAndRetainsImage() async throws {
@@ -53,20 +76,147 @@ final class LoopAuditionTests:XCTestCase {
         try await wait { opened }
         let removals=video.imageRemovals
         let end=1+3.0/24
-        var passes=0, finished=false, lastFrameCount=0
-        player.playRange(until:end,loopStart:1,shouldLoop:{
-            let count=video.timestamps.filter { abs($0-(end-1.0/24))<0.000001 }.count
-            XCTAssertGreaterThan(count,lastFrameCount,"The last included B-frame must be enqueued in every pass")
-            lastFrameCount=count; passes += 1; return passes<3
-        },onEnd:{ finished=true })
+        var finished=false
+        player.playRange(until:end,loopStart:1,looping:true,onEnd:{ finished=true })
+        try await wait { player.clock.rate>0 }
+        try await Task.sleep(nanoseconds:600_000_000)
+        XCTAssertFalse(player.loopGap)
+        for pass in 0..<3 {
+            let last=end-1.0/24+Double(pass)*(end-1)
+            XCTAssertTrue(video.timestamps.contains { abs($0-last)<0.000001 },"The last included B-frame must be enqueued in every pass")
+        }
+        player.setLooping(false)
         try await wait { finished }
-        XCTAssertEqual(passes,3)
         XCTAssertFalse(video.timestamps.isEmpty); XCTAssertFalse(audio.endTimes.isEmpty)
-        XCTAssertTrue(video.timestamps.allSatisfy { $0<end-0.0000001 })
-        XCTAssertTrue(audio.endTimes.allSatisfy { $0<=end+0.000001 },"No audio sample may cross the cut")
-        XCTAssertGreaterThan(audio.endTimes.max() ?? 0,end-1.0/48000-0.000001)
+        for (end,start) in zip(audio.endTimes,audio.startTimes.dropFirst()) {
+            XCTAssertEqual(end,start,accuracy:1.0/48000,"PCM must be contiguous across the wrap")
+        }
         XCTAssertEqual(video.imageRemovals,removals,"Wraps must keep the image visible")
         XCTAssertFalse(player.transportWanted)
+    }
+    @MainActor func testLoopClockNeverStopsOrRewindsAcrossWraps() async throws {
+        let player=Playback()
+        defer { player.close() }
+        var opened=false
+        player.open(fixture("cfr.mp4"),at:1,completion:{ opened=true })
+        try await wait { opened }
+        player.playRange(until:1.25,loopStart:1,looping:true)
+        try await wait { player.clock.rate>0 }
+        let history=RateHistory()
+        let rateObservation=history.observe(player.clock)
+        var stopped=0
+        let observation=player.$playing.dropFirst().sink { if !$0 && player.transportWanted { stopped += 1 } }
+        let beginning=player.clock.currentTime().seconds
+        try await Task.sleep(nanoseconds:800_000_000)
+        XCTAssertTrue(history.rates.allSatisfy { $0==1 })
+        rateObservation.invalidate()
+        XCTAssertEqual(stopped,0,"A wrap must not pause transport while preparing the next pass")
+        XCTAssertGreaterThan(player.clock.currentTime().seconds-beginning,0.7,"Renderer time must stay continuous across wraps")
+        observation.cancel()
+    }
+    @MainActor func testReal4KSelectionLoopsContinuouslyWhenProvided() async throws {
+        guard let path=ProcessInfo.processInfo.environment["CLIPPER_SAMPLE"] else { throw XCTSkip("Set CLIPPER_SAMPLE to check the original 4K AV1 selection") }
+        let video=VideoSamples(), audio=AudioSamples(), player=Playback(video:video,audio:audio)
+        defer { player.close() }
+        video.renderClock=player.clock
+        var opened=false
+        player.open(URL(fileURLWithPath:path),at:499.874,completion:{ opened=true })
+        try await wait({ opened },timeout:30)
+        let end=try XCTUnwrap(player.frame).end
+        player.seek(493.257)
+        try await wait({ !player.seeking },timeout:30)
+        let start=try XCTUnwrap(player.frame).time
+        player.playRange(until:end,loopStart:start,looping:true)
+        try await wait({ player.clock.rate>0 },timeout:30)
+        let history=RateHistory()
+        let rateObservation=history.observe(player.clock)
+        var stopped=0
+        let observation=player.$playing.dropFirst().sink { if !$0 && player.transportWanted { stopped += 1 } }
+        let beginning=player.clock.currentTime().seconds, flushes=video.flushCount
+        try await Task.sleep(nanoseconds:UInt64((2*(end-start)+0.5)*1_000_000_000))
+        XCTAssertEqual(stopped,0)
+        XCTAssertTrue(history.rates.allSatisfy { $0==1 })
+        rateObservation.invalidate()
+        XCTAssertEqual(video.flushCount,flushes,"No display-layer flush at a loop seam")
+        XCTAssertFalse(player.loopGap,"The spare must be ready before each wrap")
+        XCTAssertGreaterThan(player.clock.currentTime().seconds-beginning,2*(end-start))
+        for pass in 1...2 {
+            let boundary=end+Double(pass-1)*(end-start)
+            let first=try XCTUnwrap(video.timestamps.first { $0>=boundary-0.000001 })
+            XCTAssertEqual(first,boundary,accuracy:0.000002,"No missing video time at the seam")
+            let margins=video.enqueueLead.filter { $0.0>=boundary && $0.0<boundary+0.1 }.map { $0.1 }
+            XCTAssertGreaterThan(try XCTUnwrap(margins.min()),0.05,"Loop head must reach the renderer before its deadline")
+        }
+        for (end,start) in zip(audio.endTimes,audio.startTimes.dropFirst()) {
+            XCTAssertEqual(end,start,accuracy:1.0/48000+0.000001,"No inserted PCM gap at the cut")
+        }
+        print("Continuous 4K loop: period \(end-start) s, clock advanced \(player.clock.currentTime().seconds-beginning) s, transport pauses \(stopped)")
+        observation.cancel()
+    }
+    @MainActor func testHundredSingleFramePassesAndWarmResumeKeepTimeline() async throws {
+        let video=VideoSamples(), audio=AudioSamples(), player=Playback(video:video,audio:audio)
+        defer { player.close() }
+        var opened=false
+        player.open(fixture("cfr.mp4"),at:1,completion:{ opened=true })
+        try await wait { opened }
+        player.playRange(until:1+1.0/24,loopStart:1,looping:true)
+        try await wait { player.clock.rate>0 }
+        let first=player.clock.currentTime().seconds, flushes=video.flushCount
+        try await Task.sleep(nanoseconds:4_300_000_000)
+        XCTAssertGreaterThanOrEqual(video.timestamps.count,100)
+        XCTAssertGreaterThan(player.clock.currentTime().seconds-first,4.2)
+        XCTAssertFalse(player.loopGap)
+        XCTAssertEqual(video.flushCount,flushes)
+        player.pause()
+        XCTAssertEqual(player.frame?.time ?? -1,1,accuracy:0.000001)
+        let paused=player.clock.currentTime().seconds, resumed=Date()
+        player.playRange(until:1+1.0/24,loopStart:1,looping:true)
+        try await wait { player.clock.rate>0 }
+        XCTAssertLessThan(Date().timeIntervalSince(resumed),0.12)
+        try await Task.sleep(nanoseconds:150_000_000)
+        XCTAssertGreaterThan(player.clock.currentTime().seconds,paused+0.1)
+        XCTAssertEqual(video.flushCount,flushes)
+        player.setLooping(false)
+        try await wait { !player.transportWanted && !player.seeking }
+    }
+    @MainActor func testRapidLoopReenableWhilePlayingAndPausedDoesNotStop() async throws {
+        let editor=open(); defer { editor.close() }
+        try await select(editor,start:1,end:1.49)
+        editor.toggleLoop(); editor.togglePlayback()
+        try await wait { editor.playback.clock.rate>0 }
+        editor.toggleLoop(); editor.toggleLoop()
+        try await Task.sleep(nanoseconds:1_200_000_000)
+        XCTAssertTrue(editor.loopEnabled); XCTAssertTrue(editor.isPlaying)
+        XCTAssertEqual(editor.playback.clock.rate,1)
+        editor.togglePlayback()
+        editor.toggleLoop(); editor.toggleLoop()
+        editor.togglePlayback()
+        try await Task.sleep(nanoseconds:1_200_000_000)
+        XCTAssertTrue(editor.loopEnabled); XCTAssertTrue(editor.isPlaying)
+        XCTAssertEqual(editor.playback.clock.rate,1)
+    }
+    @MainActor func testPreparationCancellationCannotReturnOldSource() async throws {
+        for _ in 0..<15 {
+            let preparation=LoopPreparation()
+            preparation.prepare(url:fixture("cfr.mp4"),audioTrack:0,start:0)
+            try await Task.sleep(nanoseconds:15_000_000)
+            preparation.cancel()
+            XCTAssertNil(preparation.take(),"Cancellation must remove the ready lane synchronously")
+            preparation.prepare(url:fixture("vfr.mkv"),audioTrack:0,start:0)
+            preparation.cancel()
+            XCTAssertNil(preparation.take())
+        }
+        let editor=open(); defer { editor.close() }
+        try await select(editor,start:1,end:1.12)
+        for _ in 0..<12 {
+            editor.toggleLoop(); editor.togglePlayback()
+            editor.close()
+            try await Task.sleep(nanoseconds:10_000_000)
+            XCTAssertNil(editor.source); XCTAssertNil(editor.playback.frame)
+            XCTAssertFalse(editor.isPlaying)
+            editor.open(fixture("vfr.mkv"))
+            try await wait { !editor.loading && !editor.playback.seeking }
+        }
     }
     @MainActor func testShortAndVFRSelectionsLoopWithoutChangingMarkers() async throws {
         for name in ["cfr.mp4","vfr.mkv"] {
@@ -74,7 +224,10 @@ final class LoopAuditionTests:XCTestCase {
             try await select(editor,start:1,end:1.12)
             let start=editor.start, end=editor.end
             var passes=0
-            let observation=editor.playback.$seeking.dropFirst().sink { if $0 { passes += 1 } }
+            var previous=editor.playback.position
+            let observation=editor.playback.$position.dropFirst().sink { value in
+                if value<previous-0.001 { passes += 1 }; previous=value
+            }
             editor.toggleLoop()
             XCTAssertFalse(editor.isPlaying,"Enabling loop while paused starts nothing")
             editor.togglePlayback()
@@ -133,7 +286,10 @@ final class LoopAuditionTests:XCTestCase {
         let editor=open(); defer { editor.close() }
         try await select(editor,start:1,end:1)
         var wraps=0
-        let observation=editor.playback.$seeking.dropFirst().sink { if $0 { wraps += 1 } }
+        var previous=editor.playback.position
+        let observation=editor.playback.$position.dropFirst().sink { value in
+            if value<previous-0.001 { wraps += 1 }; previous=value
+        }
         editor.toggleLoop(); editor.togglePlayback()
         try await wait { wraps>=3 && editor.playback.clock.rate>0 }
         let old=editor.edit
@@ -149,7 +305,8 @@ final class LoopAuditionTests:XCTestCase {
         let editor=open(); defer { editor.close() }
         try await select(editor,start:1,end:1.04)
         editor.toggleLoop(); editor.togglePlayback()
-        try await wait { editor.playback.seeking }
+        try await wait { editor.playback.clock.rate>0 }
+        try await Task.sleep(nanoseconds:180_000_000)
         editor.playback.pause()
         try await Task.sleep(nanoseconds:200_000_000)
         XCTAssertFalse(editor.isPlaying); XCTAssertFalse(editor.playback.playing)
@@ -163,9 +320,10 @@ final class LoopAuditionTests:XCTestCase {
     @MainActor func testLoopToggleDuringPlayAndEditingInterruptsTransport() async throws {
         let editor=open(); defer { editor.close() }
         try await select(editor,start:1,end:1.2)
-        editor.togglePlayback()
         for _ in 0..<11 { editor.toggleLoop() }
-        try await wait { editor.playback.seeking }
+        editor.togglePlayback()
+        try await wait { editor.playback.clock.rate>0 }
+        try await Task.sleep(nanoseconds:300_000_000)
         XCTAssertTrue(editor.isPlaying)
         editor.toggleLoop() // Finish the current pass.
         try await wait { !editor.isPlaying && !editor.playback.seeking }

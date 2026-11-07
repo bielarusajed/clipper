@@ -295,6 +295,10 @@ struct EditorView:View {
                 Text(TimeText.format(editor.displayedPosition)).font(.system(size:12,weight:.semibold).monospacedDigit()).foregroundStyle(C1.ink).padding(.leading,3)
                 if playback.seeking { ProgressView().controlSize(.mini) }
                 Spacer()
+                if editor.previewMode == .original && editor.loopEnabled && playback.loopGap {
+                    Text("Rewind gap").font(.system(size:10)).foregroundStyle(C1.amber)
+                        .help("Playback had to rewind at a committed boundary. This pause is playback overhead, not part of your clip.")
+                }
                 Button { editor.toggleLoop() } label: {
                     Image(systemName:"repeat").frame(width:24,height:24)
                         .foregroundStyle(editor.loopEnabled ? C1.blue : C1.secondary)

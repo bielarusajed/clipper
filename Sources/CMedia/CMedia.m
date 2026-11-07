@@ -157,10 +157,15 @@ void clip_close(ClipMedia *m) {
 ClipInfo clip_info(ClipMedia *m) { return m->info; }
 const char *clip_audio_label(ClipMedia *m, int track) { return m->audioLabels[track]; }
 int clip_audio_stream(ClipMedia *m, int track) { return m->audioStreams[track]; }
-int clip_seek(ClipMedia *m, double time) {
+static int seekWithPreroll(ClipMedia *m, double time, int audioPreroll) {
     // AVI demuxers may choose the following keyframe at a rounded seek boundary.
     // Decode preroll and choose by presentation timestamp rather than trusting it.
     double preroll = !strcmp(m->format->iformat->name,"avi") ? 1.0 : 0;
+    if (audioPreroll && m->audio) {
+        AVCodecParameters *audio=m->format->streams[m->ai]->codecpar;
+        if (audio->codec_id==AV_CODEC_ID_OPUS)
+            preroll=fmax(preroll,fmax(0.08,(double)audio->seek_preroll/fmax(1,audio->sample_rate)));
+    }
     int64_t timestamp = (int64_t)((fmax(0,time-preroll) + m->info.origin) * AV_TIME_BASE);
     int rc = avformat_seek_file(m->format, -1, INT64_MIN, timestamp, timestamp, AVSEEK_FLAG_BACKWARD);
     if (rc < 0) return rc;
@@ -175,7 +180,20 @@ int clip_seek(ClipMedia *m, double time) {
     m->lastRaw=-1;
     return 0;
 }
+int clip_seek(ClipMedia *m,double time) { return seekWithPreroll(m,time,0); }
 void clip_enable_cache(ClipMedia *m) { m->cacheEnabled=1; }
+void clip_set_cache(ClipMedia *m,int enabled) {
+    m->cacheEnabled=enabled;
+    if (enabled) return;
+    // Resume queues own their references independently and must survive this operation.
+    clearAudioCache(m);
+    for (int i=0;i<RenderCacheCount;i++) {
+        if (m->cache[i].sample) CFRelease(m->cache[i].sample);
+        m->cache[i]=(ClipSample){0}; m->confirmed[i]=0;
+    }
+    for (int i=0;i<RawCacheCount;i++) av_frame_free(&m->rawCache[i]);
+    m->rawSlot=0; m->lastRaw=-1; m->lastDecoded=NAN;
+}
 static void cacheFrame(ClipMedia *m, ClipSample s) {
     if (!m->cacheEnabled || s.kind!=1) return;
     int existing=-1;
@@ -307,6 +325,32 @@ static int decodeFrame(ClipMedia *m) {
             m->receiving=kind;
         }
         av_packet_unref(m->packet);
+    }
+}
+// Loop heads are exact source frame boundaries. Unlike clip_frame, this path does
+// not fill a raw-frame cache while decoding keyframe/audio preroll.
+int clip_prepare(ClipMedia *m,double start,ClipRequest *request,int generation) {
+    clip_set_cache(m,0);
+    if (seekWithPreroll(m,start,1)<0) return -1;
+    for (;;) {
+        if (request && atomic_load(&request->generation)!=generation) { clearResume(m); return -1; }
+        int kind=decodeFrame(m);
+        if (kind<=0) { clearResume(m); return -1; }
+        if (kind==1) {
+            double t=m->frame->best_effort_timestamp*av_q2d(m->format->streams[m->vi]->time_base)-m->info.origin;
+            if (t<start-0.000001) continue;
+            AVFrame *frame=av_frame_clone(m->frame);
+            if (!frame) { clearResume(m); return -1; }
+            m->resumeFrames[0]=frame; m->resumeFrameCount=1;
+            return 0;
+        }
+        ClipSample audio=audioSample(m,m->frame);
+        if (audio.kind==-2) continue;
+        if (audio.kind!=2 || m->resumeAudioCount>=AudioCacheCount) {
+            if (audio.sample) CFRelease(audio.sample);
+            clearResume(m); return -1;
+        }
+        m->resumeAudio[m->resumeAudioCount++]=audio;
     }
 }
 // Reuse a continuous decoded segment and its audio, never an unrelated cache hit.
