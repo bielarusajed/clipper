@@ -26,6 +26,7 @@ Open `dist/Clipper.app`. The app includes its media engine and needs no Homebrew
 - Preview/export stay pinned below the left settings. Close the source with its × button to return to the Open Video empty state.
 - After rendering a preview, choose Compare and drag the wipe to inspect the original crop beside the encoded output. Forward/backward steps align both halves. The episode overview pans the zoomed timeline without changing the clip.
 - Export Clip writes a unique filename beside the source. Its right-hand folder button opens Save As directly and honors macOS's Replace confirmation for an existing output. The source video is protected. Replacement happens only after rendering succeeds; cancelling or a failed render leaves the previous output intact.
+- After export, drag the file icon or filename into an app that accepts files, or use Copy and paste it there. Finder drops copy the clip. Show in Finder remains available. Moved or removed exports disable these actions until the file returns or another export succeeds. Save As rejects Clipper's disposable import folders.
 
 ## Build
 

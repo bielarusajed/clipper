@@ -274,10 +274,7 @@ struct EditorView:View {
                         .overlay(RoundedRectangle(cornerRadius:8).stroke(C1.blue.opacity(0.4),lineWidth:1).allowsHitTesting(false))
                         .opacity(editor.canExport ? 1 : 0.45).disabled(!editor.canExport)
                 }
-                if editor.lastExport != nil {
-                    Button { editor.revealExport() } label: { Label("Saved · Show in Finder",systemImage:"checkmark.circle.fill") }
-                        .buttonStyle(.plain).font(.system(size:9)).foregroundStyle(C1.secondary).frame(maxWidth:.infinity)
-                }
+                ExportHandoffView(clip:editor.exportedClip)
             }
         }.padding(.horizontal,14).padding(.top,12).padding(.bottom,14)
             .background(C1.line.frame(height:1),alignment:.top)
