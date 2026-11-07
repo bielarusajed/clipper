@@ -1,9 +1,12 @@
 import SwiftUI
 import AVKit
+import CMedia
 
 struct Viewer:View {
     @ObservedObject var editor:Editor
     @ObservedObject var playback:Playback
+    @ObservedObject var subtitles:SubtitleController
+    init(editor:Editor,playback:Playback) { self.editor=editor; self.playback=playback; self.subtitles=editor.subtitles }
     @State private var wipe=0.5
 
     var body:some View {
@@ -34,7 +37,7 @@ struct Viewer:View {
                     let scale=min(geometry.size.width/size.width,geometry.size.height/size.height)
                     let display=CGSize(width:max(1,size.width*scale),height:max(1,size.height*scale))
                     ZStack {
-                        ComparisonSurface(source:playback.video,player:editor.outputPlayer,details:details,edit:editor.edit,mode:editor.previewMode,wipe:wipe,onWipe:{ wipe=$0 })
+                        ComparisonSurface(playback:playback,subtitles:subtitles.enabled && (!details.hdr || editor.edit.convertToSDR) ? subtitles.render : nil,source:playback.video,player:editor.outputPlayer,details:details,edit:editor.edit,mode:editor.previewMode,wipe:wipe,onWipe:{ wipe=$0 })
                         if editor.previewMode == .original, editor.edit.cropPreset != .original {
                             CropOverlay(crop:$editor.edit.crop).disabled(editor.exporting || editor.loading)
                         }
@@ -70,6 +73,8 @@ struct Viewer:View {
 /// Both video layers keep one owner across all display modes. Only their layout
 /// and the encoded layer's mask change when the user moves the comparison wipe.
 struct ComparisonSurface:NSViewRepresentable {
+    let playback:Playback
+    let subtitles:RenderSubtitles?
     let source:AVSampleBufferDisplayLayer
     let player:AVPlayer
     let details:MediaDetails
@@ -79,6 +84,7 @@ struct ComparisonSurface:NSViewRepresentable {
     var onWipe:((Double)->Void)?
     func makeNSView(context:Context)->Surface { Surface(source:source,player:player) }
     func updateNSView(_ view:Surface,context:Context) {
+        view.playback=playback; view.subtitleAsset=subtitles
         view.details=details; view.edit=edit; view.mode=mode; view.onWipe=onWipe
         if !view.draggingWipe { view.wipe=wipe }
         view.needsLayout=true
@@ -87,9 +93,35 @@ struct ComparisonSurface:NSViewRepresentable {
     static func dismantleNSView(_ view:Surface,coordinator:()) {
         if view.source.superlayer === view.sourceViewport { view.source.removeFromSuperlayer() }
         view.output.player=nil
+        view.subtitleTimer?.cancel(); view.subtitleTimer=nil
     }
     final class Surface:NSView {
         let source:AVSampleBufferDisplayLayer
+        weak var playback:Playback?
+        var subtitleAsset:RenderSubtitles? {
+            didSet {
+                if oldValue?.identity != subtitleAsset?.identity {
+                    if subtitleAsset == nil {
+                        subtitleLayer.contents=nil
+                        let worker=subtitleWorker
+                        subtitleQueue.async { worker.clear() }
+                    }
+                }
+            }
+        }
+        let subtitleLayer=CALayer()
+        private let subtitleWorker=SubtitleOverlayWorker()
+        let subtitleQueue=DispatchQueue(label:"clipper.subtitles",qos:.userInteractive)
+        var subtitleTimer:DispatchSourceTimer?
+        var subtitleBusy=false
+        private var lastSubtitleRequest:SubtitleOverlayRequest?
+        private struct SubtitleOverlayRequest:Equatable {
+            let identity:UUID
+            let milliseconds:Int64
+            let width:Int
+            let height:Int
+            let canvas:CGRect
+        }
         let sourceViewport=CALayer()
         let output:AVPlayerLayer
         let wipeMask=CALayer()
@@ -106,7 +138,12 @@ struct ComparisonSurface:NSViewRepresentable {
             super.init(frame:.zero)
             wantsLayer=true; layer=CALayer(); layer?.backgroundColor=NSColor.black.cgColor
             sourceViewport.masksToBounds=true
-            sourceViewport.addSublayer(source); layer?.addSublayer(sourceViewport)
+            sourceViewport.addSublayer(source); sourceViewport.addSublayer(subtitleLayer); layer?.addSublayer(sourceViewport)
+            subtitleLayer.contentsGravity = .resize
+            let timer=DispatchSource.makeTimerSource(queue:.main)
+            timer.schedule(deadline:.now(),repeating:.milliseconds(16))
+            timer.setEventHandler { [weak self] in self?.renderSubtitles() }
+            timer.resume(); subtitleTimer=timer
             output.videoGravity = .resize; layer?.addSublayer(output)
             wipeMask.backgroundColor=NSColor.white.cgColor
             divider.backgroundColor=NSColor.white.cgColor
@@ -172,6 +209,41 @@ struct ComparisonSurface:NSViewRepresentable {
             layoutDivider()
             CATransaction.commit()
         }
+        private func renderSubtitles() {
+            guard let asset=subtitleAsset,let details,let playback,mode != .output else { if subtitleLayer.contents != nil { subtitleLayer.contents=nil }; lastSubtitleRequest=nil; return }
+            guard !subtitleBusy else { return }
+            let g=edit.geometry(for:details)
+            let width=asset.preserve ? Int(details.displaySize.width/2)*2 : g.outWidth
+            let height=asset.preserve ? Int(details.displaySize.height/2)*2 : g.outHeight
+            let playing=playback.playing
+            let ms=asset.milliseconds(frame:playing ? nil : playback.frame,relativeTime:playing ? playback.clock.currentTime().seconds : playback.position,origin:details.origin)
+            let canvas:CGRect
+            if mode == .original {
+                let sx=bounds.width/details.displaySize.width,sy=bounds.height/details.displaySize.height
+                canvas=asset.preserve ? bounds : CGRect(x:Double(g.x)*sx,y:bounds.height-Double(g.y+g.height)*sy,width:Double(g.width)*sx,height:Double(g.height)*sy)
+            } else {
+                let sx=bounds.width/Double(g.width),sy=bounds.height/Double(g.height)
+                canvas=asset.preserve ? CGRect(x:-Double(g.x)*sx,y:bounds.height-Double(height-g.y)*sy,width:Double(width)*sx,height:Double(height)*sy) : bounds
+            }
+            let request=SubtitleOverlayRequest(identity:asset.identity,milliseconds:ms,width:width,height:height,canvas:canvas)
+            guard request != lastSubtitleRequest else { return }
+            lastSubtitleRequest=request
+            subtitleBusy=true
+            let worker=subtitleWorker
+            subtitleQueue.async { [weak self] in
+                let result=worker.render(asset:asset,milliseconds:ms,width:width,height:height)
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }; self.subtitleBusy=false
+                    guard self.subtitleAsset?.identity==asset.identity,self.mode != .output else { return }
+                    let box=result.box
+                    let frame=CGRect(x:canvas.minX+box.minX/Double(width)*canvas.width,y:canvas.minY+(Double(height)-box.maxY)/Double(height)*canvas.height,width:box.width/Double(width)*canvas.width,height:box.height/Double(height)*canvas.height)
+                    guard result.changed || self.subtitleLayer.frame != frame || (self.subtitleLayer.contents == nil && result.image != nil) else { return }
+                    CATransaction.begin(); CATransaction.setDisableActions(true)
+                    self.subtitleLayer.contents=result.image; self.subtitleLayer.frame=frame
+                    CATransaction.commit()
+                }
+            }
+        }
         private func layoutDivider() {
             setAccessibilityElement(mode == .compare)
             divider.isHidden=mode != .compare; knob.isHidden=mode != .compare
@@ -210,5 +282,32 @@ struct CropOverlay:View {
                     }.onEnded { _ in original=nil })
             }.coordinateSpace(name:"crop")
         }
+    }
+}
+
+/// This object is used only on Surface.subtitleQueue. Slow scripts drop overlay updates.
+private final class SubtitleOverlayWorker: @unchecked Sendable {
+    var renderer:OpaquePointer?
+    var asset:RenderSubtitles?
+    var image:CGImage?
+    var box=CGRect.zero
+    deinit { if let renderer { clip_subtitles_free(renderer) } }
+    func clear() {
+        if let renderer { clip_subtitles_free(renderer) }
+        renderer=nil; asset=nil; image=nil; box = .zero
+    }
+    func render(asset:RenderSubtitles,milliseconds:Int64,width:Int,height:Int)->(image:CGImage?,box:CGRect,changed:Bool) {
+        if self.asset?.identity != asset.identity {
+            if let renderer { clip_subtitles_free(renderer) }
+            renderer=clip_subtitles_open(asset.file.path,asset.fonts.path); self.asset=asset; image=nil; box = .zero
+        }
+        guard let renderer else { return (nil,.zero,true) }
+        var x:Int32=0,y:Int32=0,changed:Int32=0
+        let rendered=clip_subtitles_render(renderer,milliseconds,Int32(width),Int32(height),&x,&y,&changed)?.takeRetainedValue()
+        if changed != 0 {
+            image=rendered
+            box=CGRect(x:Int(x),y:Int(y),width:rendered?.width ?? 0,height:rendered?.height ?? 0)
+        }
+        return (image,box,changed != 0)
     }
 }

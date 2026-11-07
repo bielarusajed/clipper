@@ -41,6 +41,7 @@ struct MediaDetails {
     var codec: String
     var audioLabels: [String]
     var audioStreams: [Int]
+    var colorSpace:Int = 2 // AVColorSpace.unspecified; playback assumes 709 for untagged HD.
     var displaySize: CGSize {
         let size = CGSize(width: Double(width)*pixelAspect, height: Double(height))
         return abs(sin(rotation * .pi / 180)) > 0.5 ? CGSize(width: size.height, height: size.width) : size

@@ -1,11 +1,13 @@
 import AppKit
+import Combine
 import AVFoundation
 import SwiftUI
 import UniformTypeIdentifiers
-import Combine
 
 @MainActor final class Editor: ObservableObject {
     let playback=Playback()
+    let subtitles=SubtitleController()
+    private var subtitleChanges:AnyCancellable?
     let waveform=AudioWaveform()
     @Published var waveformVisible=false
     private var waveformObservers=Set<AnyCancellable>()
@@ -72,11 +74,12 @@ import Combine
     var inTime: Double { start?.time ?? 0 }
     var outTime: Double { min(end?.end ?? details?.duration ?? 0,details?.duration ?? 0) }
     var clipDuration: Double { max(0,outTime-inTime) }
-    var canExport: Bool { source != nil && start != nil && end != nil && clipDuration > 0 && !loading && !playback.seeking && !previewStepRunning && !exporting && !importPresented }
+    var canExport: Bool { source != nil && start != nil && end != nil && clipDuration > 0 && !loading && !playback.seeking && !previewStepRunning && !exporting && !importPresented && subtitles.ready && !(subtitles.enabled && details?.hdr == true && !edit.convertToSDR) }
 
     init(preferences:ExportPreferences = ExportPreferences()) {
         self.preferences=preferences
         edit=preferences.makeSettings()
+        subtitleChanges=subtitles.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         outputPlayer.actionAtItemEnd = .pause
         outputPlayer.automaticallyWaitsToMinimizeStalling=false
         let changes:[AnyPublisher<Void,Never>]=[
@@ -133,6 +136,7 @@ import Combine
         importTimeline=temporary?.timeline
         importTimeNote=temporary?.range == nil ? nil : "Original video times · imported section"
         defer { if let previous { playback.queue.async { withExtendedLifetime(previous) {} } } }
+        subtitles.reset()
         cancelNudges(); timelineZoom=0
         let id=UUID(); loadingID=id; loading=true
         invalidatePreview(); source=url; start=nil; end=nil; edit=preferences.makeSettings(); error=nil; exportedClip.set(nil); nextOutputURL=uniqueOutput(for:url)
@@ -143,6 +147,8 @@ import Combine
                 self.importTimeline=nil
                 self.importTimeNote="Original timestamps unavailable. Showing local section times."
             }
+            self.subtitles.open(url,details:info,timelineOffset:self.importTimeline?.offset ?? 0)
+            self.subtitles.rebuild(details:info,edit:self.edit)
             if info.hdr { self.edit.codec = .hevc }
             self.start=self.playback.frame
             self.playback.seek(max(0,info.duration-0.000001),onFailure:{
@@ -161,6 +167,7 @@ import Combine
     }
     func close() {
         guard !exporting, !urlImporter.busy else { return }
+        subtitles.reset()
         cancelNudges()
         waveform.resetSource()
         loadingID=UUID(); loading=false
@@ -276,7 +283,14 @@ import Combine
             playback.open(source,audioTrack:edit.audioTrack,at:t,completion:{ [weak self] in if let duration { self?.playback.details?.duration=duration } })
         }
         playback.setMuted(edit.muted)
+        if let details { subtitles.rebuild(details:details,edit:edit) }
         refreshWaveform()
+    }
+    func importSubtitles(_ url:URL) {
+        guard !exporting else { return }
+        // A repeated URL can contain new text, so URL equality cannot invalidate this sample.
+        invalidatePreview()
+        subtitles.importExternal(url)
     }
     func invalidatePreview() {
         revision=UUID(); stopPreviewTracking(); previewStatus=nil
@@ -477,7 +491,7 @@ import Combine
         let token=revision
         let temporary=destination.deletingLastPathComponent().appendingPathComponent(".clipper-\(UUID().uuidString).mp4")
         let job=EncoderProcess(); encoder=job
-        let request=ExportRequest(source:source,details:details,edit:edit,start:start,end:end,destination:temporary)
+        let request=ExportRequest(source:source,details:details,edit:edit,start:start,end:end,destination:temporary,subtitles:subtitles.enabled ? subtitles.render : nil)
         exporting=true; progress=0; error=nil; jobLabel=isPreview ? "Rendering preview" : "Exporting clip"
         Task {
             defer {

@@ -15,6 +15,9 @@ mkdir -p .build/vendor .build/media
 if [[ ! -f .build/media/lib/libdav1d.7.dylib || ! -f .build/media/lib/libzimg.2.dylib ]]; then
   bash scripts/build-dependencies.sh
 fi
+if [[ ! -f .build/media/lib/libass.9.dylib ]]; then
+  bash scripts/build-subtitles.sh > .build/subtitle-build.log 2>&1
+fi
 if [[ ! -f .build/vendor/ffmpeg-$VERSION.tar.xz ]]; then
   curl -fL --retry 3 "https://ffmpeg.org/releases/ffmpeg-$VERSION.tar.xz" -o ".build/vendor/ffmpeg-$VERSION.tar.xz"
 fi
@@ -39,8 +42,8 @@ if [[ -f ffbuild/config.mak ]]; then make clean > "$ROOT/.build/media-clean.log"
   --disable-gpl --disable-nonfree --disable-version3 --disable-autodetect \
   --enable-shared --disable-static --disable-debug --disable-doc --enable-network --enable-securetransport \
   --disable-avdevice --disable-ffplay --enable-videotoolbox --enable-audiotoolbox \
-  --enable-libdav1d --enable-libzimg --enable-zlib --disable-encoders \
-  --enable-encoder=h264_videotoolbox,hevc_videotoolbox,aac_at,pcm_s16le,png \
+  --enable-libass --enable-libdav1d --enable-libzimg --enable-zlib --disable-encoders \
+  --enable-encoder=h264_videotoolbox,hevc_videotoolbox,aac_at,pcm_s16le,png,ass,ssa \
   --extra-cflags="-isysroot $SDKROOT -mmacosx-version-min=14.0" \
   --extra-ldflags="-isysroot $SDKROOT -Wl,-rpath,$ROOT/.build/media/lib" > "$ROOT/.build/media-configure.log" 2>&1
 make -j"${CLIPPER_BUILD_JOBS:-4}" > "$ROOT/.build/media-build.log" 2>&1

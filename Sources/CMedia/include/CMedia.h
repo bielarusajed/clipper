@@ -1,6 +1,8 @@
 #pragma once
 #include <CoreMedia/CoreMedia.h>
 #include <CoreVideo/CoreVideo.h>
+#include <CoreGraphics/CoreGraphics.h>
+
 
 typedef struct ClipMedia ClipMedia;
 typedef struct ClipRequest ClipRequest;
@@ -24,6 +26,7 @@ typedef struct {
     int width, height;
     double rotation, pixelAspect, fps;
     int hdr;
+    int colorSpace;
     int audioCount;
     char codec[64];
 } ClipInfo;
@@ -50,3 +53,23 @@ ClipSample clip_next_cancellable(ClipMedia *media, ClipRequest *request, int gen
 ClipSample clip_frame(ClipMedia *media, double time);
 ClipSample clip_frame_cancellable(ClipMedia *media, double time, ClipRequest *request, int generation);
 ClipSample clip_thumbnail(ClipMedia *media, double time, ClipRequest *request, int generation);
+
+// Subtitle catalog and font attachments. Catalog owns its demuxer; never shares playback state.
+typedef struct ClipSubtitleCatalog ClipSubtitleCatalog;
+ClipSubtitleCatalog *clip_subtitle_catalog(const char *path, const char *fontsDirectory);
+void clip_subtitle_catalog_free(ClipSubtitleCatalog *catalog);
+int clip_subtitle_count(ClipSubtitleCatalog *catalog);
+int clip_subtitle_stream(ClipSubtitleCatalog *catalog, int index);
+const char *clip_subtitle_label(ClipSubtitleCatalog *catalog, int index);
+int clip_subtitle_styled(ClipSubtitleCatalog *catalog, int index);
+int clip_subtitle_default(ClipSubtitleCatalog *catalog, int index);
+int clip_subtitle_unsupported(ClipSubtitleCatalog *catalog);
+
+typedef struct ClipSubtitles ClipSubtitles;
+ClipSubtitles *clip_subtitles_open(const char *path, const char *fontsDirectory);
+void clip_subtitles_free(ClipSubtitles *subtitles);
+int clip_subtitles_events(ClipSubtitles *subtitles);
+// Returns a retained premultiplied RGBA image of the visible bounding box, or NULL.
+// All calls for a renderer must run on the same serial queue.
+CGImageRef clip_subtitles_render(ClipSubtitles *subtitles, int64_t milliseconds,
+                                int width, int height, int *x, int *y, int *changed);
