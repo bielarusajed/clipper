@@ -1,5 +1,11 @@
 # Validation and known limits
 
+## 0.5.1 window chrome
+
+The native window probe confirmed that blur was enabled, Reduce Transparency was off, and the window background was clear. Its title bar had reverted to an opaque background and visible title after initial setup. The window hook now reapplies transparent, separator-free chrome after SwiftUI updates and deferred sizing. It only changes properties that differ, and keeps the system appearance.
+
+The regression failed before the fix. It now covers a chrome reset both with unchanged source metadata and when opening a source. Five focused tests passed, including adaptive window sizing, timeline scrolling and persistent comparison-layer geometry. Logs are `.build/window-appearance-red.log` and `.build/window-appearance-green.log`. Temporary appearance probes were removed. Media and glass rendering code are unchanged from 0.5.0.
+
 ## 0.5.0 integration
 
 Release validation uses the merged application on an Apple M1 Pro with macOS 27.0.1 and Xcode 27.2. All seven feature suites are integrated on main, alongside the existing media, window, timeline, importer and source-protection checks. This release cleanup changes documentation, version metadata and packaging only.

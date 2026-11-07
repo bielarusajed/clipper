@@ -48,11 +48,13 @@ struct EditorWindow:NSViewRepresentable {
         private var lastSize=CGSize.zero
         private var fitting=false
         private var scheduled=false
+        private var appearanceScheduled=false
         private var centerAfterOpen=false
         private var observers:[NSObjectProtocol]=[]
         var onAvailableSize:((CGSize)->Void)?
 
         func update(source:URL?,videoSize:CGSize?) {
+            scheduleAppearance()
             let ratio=videoSize.flatMap { size in
                 size.width.isFinite && size.height.isFinite && size.width>0 && size.height>0 ? size.width/size.height : nil
             }
@@ -66,13 +68,7 @@ struct EditorWindow:NSViewRepresentable {
             super.viewDidMoveToWindow()
             stopObserving()
             guard let window else { return }
-            window.appearance=nil
-            window.titlebarAppearsTransparent=true
-            window.toolbar=nil
-            window.isOpaque=false
-            window.backgroundColor = .clear
-            window.titleVisibility = .hidden
-            window.styleMask.insert(.fullSizeContentView)
+            applyAppearance(to:window)
             let center=NotificationCenter.default
             observers.append(center.addObserver(forName:NSWindow.didResizeNotification,object:window,queue:.main) { [weak self, weak window] _ in
                 guard let self, let window, !self.fitting, !self.scheduled, !window.styleMask.contains(.fullScreen) else { return }
@@ -95,6 +91,27 @@ struct EditorWindow:NSViewRepresentable {
             scheduleFit()
         }
 
+        private func applyAppearance(to window:NSWindow) {
+            if !window.styleMask.contains(.fullSizeContentView) { window.styleMask.insert(.fullSizeContentView) }
+            if window.appearance != nil { window.appearance=nil }
+            if !window.titlebarAppearsTransparent { window.titlebarAppearsTransparent=true }
+            if window.toolbar != nil { window.toolbar=nil }
+            if window.isOpaque { window.isOpaque=false }
+            if window.backgroundColor.alphaComponent != 0 { window.backgroundColor = .clear }
+            if window.titleVisibility != .hidden { window.titleVisibility = .hidden }
+            if window.titlebarSeparatorStyle != .none { window.titlebarSeparatorStyle = .none }
+        }
+
+        private func scheduleAppearance() {
+            guard !appearanceScheduled else { return }
+            appearanceScheduled=true
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.appearanceScheduled=false
+                if let window=self.window { self.applyAppearance(to:window) }
+            }
+        }
+
         private func scheduleFit() {
             guard !scheduled else { return }
             scheduled=true
@@ -106,12 +123,15 @@ struct EditorWindow:NSViewRepresentable {
 
         func fit() {
             guard let window, let screen=window.screen ?? NSScreen.main else { return }
+            fitting=true
+            defer { fitting=false }
+            // SwiftUI can reapply its title-bar defaults after attachment or a new
+            // navigation title. Restore our chrome in the deferred layout pass.
+            applyAppearance(to:window)
             if window.styleMask.contains(.fullScreen) {
                 onAvailableSize?(CGSize(width:CGFloat.infinity,height:CGFloat.infinity))
                 return
             }
-            fitting=true
-            defer { fitting=false }
             let visible=screen.visibleFrame
             // The SwiftUI editor lives below the title bar, including with full-size content.
             let titleHeight=window.frame.height-window.contentLayoutRect.height

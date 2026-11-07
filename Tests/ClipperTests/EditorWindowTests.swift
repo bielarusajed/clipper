@@ -21,6 +21,32 @@ final class EditorWindowTests:XCTestCase {
         XCTAssertLessThan(wide.height,landscape.height)
     }
 
+    @MainActor func testAppearanceSurvivesWindowChromeReset() async throws {
+        _=NSApplication.shared
+        let window=NSWindow(contentRect:CGRect(x:200,y:200,width:520,height:440),styleMask:[.titled,.closable,.resizable],backing:.buffered,defer:false)
+        window.isReleasedWhenClosed=false
+        let hook=EditorWindow.WindowHook()
+        window.contentView=hook
+        defer { window.contentView=nil; window.close() }
+        try await settle()
+        for source in [nil,URL(fileURLWithPath:"/test/video.mp4")] {
+            // SwiftUI's title-bar configuration runs after attachment and view updates,
+            // including when source metadata did not change.
+            window.titlebarAppearsTransparent=false
+            window.titleVisibility = .visible
+            window.titlebarSeparatorStyle = .line
+            window.isOpaque=true
+            window.backgroundColor = .windowBackgroundColor
+            hook.update(source:source,videoSize:source == nil ? nil : CGSize(width:1920,height:1080))
+            try await settle()
+            XCTAssertTrue(window.titlebarAppearsTransparent)
+            XCTAssertEqual(window.titleVisibility,.hidden)
+            XCTAssertEqual(window.titlebarSeparatorStyle,.none)
+            XCTAssertFalse(window.isOpaque)
+            XCTAssertEqual(window.backgroundColor.alphaComponent,0)
+        }
+    }
+
     @MainActor func testNativeEditorFitsVideoResizesAndReturnsToStarter() async throws {
         _=NSApplication.shared
         let editor=Editor()

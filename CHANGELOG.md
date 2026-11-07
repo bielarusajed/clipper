@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.1 · 7 November 2026
+
+- Keep the title bar transparent after SwiftUI refreshes or a video opens. Hide the duplicated window title and separator so the top shares the window material. Native glass, system light/dark appearance and Reduce Transparency behavior are unchanged.
+
 ## 0.5.0 · 7 November 2026
 
 - Archived builds no longer accumulate in Finder's Open With menu. Builds unregister old copies and keep their contents in folders without the `.app` suffix.
