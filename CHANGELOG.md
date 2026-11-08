@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.5 · 8 November 2026
+
+- Match the inspector and timeline island corners to the native window's corners and inset. Use system concentric shapes on macOS 26 and later, with an 8-point minimum and fallback on older systems.
+
 ## 0.5.4 · 8 November 2026
 
 - Restore the current macOS appearance of native window controls. Pin the SwiftPM build engine and reject binaries whose linked SDK differs from the selected SDK; a build-engine change had stamped recent apps with SDK 14.0 despite compiling against SDK 27.2.

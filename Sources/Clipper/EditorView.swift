@@ -21,10 +21,10 @@ struct EditorView:View {
             Group {
                 if editor.source != nil {
                     HStack(spacing:EditorWindowLayout.spacing) {
-                        sidebar.frame(width:EditorWindowLayout.sidebarWidth).modifier(GlassPanel(radius:22))
+                        sidebar.frame(width:EditorWindowLayout.sidebarWidth).modifier(GlassPanel.windowIsland)
                         VStack(spacing:EditorWindowLayout.spacing) {
                             Viewer(editor:editor,playback:playback).frame(maxWidth:.infinity,maxHeight:.infinity)
-                            timelineDeck.modifier(GlassPanel(radius:20))
+                            timelineDeck.modifier(GlassPanel.windowIsland)
                         }
                     }.padding(EditorWindowLayout.inset)
                 } else { emptyState }

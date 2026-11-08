@@ -1,5 +1,11 @@
 # Validation and known limits
 
+## 0.5.5 concentric islands
+
+The inspector and timeline use Apple's `ConcentricRectangle` with uniform corners and an 8-point minimum. The native window outline is unchanged. Reduced Transparency uses the same shape with an opaque background; macOS 14/15 retain a fixed 8-point fallback. The empty-state icon keeps its separate fixed shape.
+
+A public `GeometryProxy.concentricCornerRadii` probe in a full-content native window with a unified toolbar measured 8-point radii at the sidebar's leading corners and the timeline's bottom-trailing corner, at the existing 8-point inset. Computer-use inspection verified the loaded editor, full screen, and return to windowed mode. The five native window checks are recorded in `.build/concentric-window-tests.log`; the build log is `.build/concentric-build.log`. This visual-only change does not address the existing playback timing failures recorded below.
+
 ## 0.5.4 native control appearance
 
 Archived binaries establish that the SDK stamp changed from 27.2 to 14.0 when SwiftPM switched to its `swiftbuild` engine, before the Compact window work. Packaged and unbundled binaries agree, ruling out signing and library packaging. Restoring the `native` engine produces `minos 14.0 / sdk 27.2` with the same window code. The new packaging guard rejects the actual regressed binary and accepts the rebuilt binary, including equivalent version spellings such as 27.2.0.
