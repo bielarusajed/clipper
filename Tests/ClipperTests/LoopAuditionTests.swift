@@ -24,20 +24,19 @@ final class LoopAuditionTests:XCTestCase {
         editor.markEnd(end); try await wait { !editor.playback.seeking }
         editor.seek(editor.inTime); try await wait { !editor.playback.seeking }
     }
-    // Legacy display-layer enqueue is used on the serial decode queue, as in Playback.
-    // @preconcurrency and the nonisolated override retain that SDK contract for this observer.
-    private final class VideoSamples:AVSampleBufferDisplayLayer {
+    // Observe operations while forwarding to the same real renderer as production.
+    private final class VideoSamples:VideoOutput {
         private let lock=NSLock()
         nonisolated(unsafe) private var times:[Double]=[]
         var imageRemovals=0
         nonisolated(unsafe) private var flushes=0
         var flushCount:Int { lock.withLock { flushes } }
-        nonisolated override func flush() { lock.withLock { flushes += 1 }; super.flush() }
+        override func flush() { lock.withLock { flushes += 1 }; super.flush() }
         nonisolated(unsafe) var renderClock:AVSampleBufferRenderSynchronizer?
         nonisolated(unsafe) private var lead:[(Double,Double)]=[]
         var enqueueLead:[(Double,Double)] { lock.withLock { lead } }
         var timestamps:[Double] { lock.withLock { times } }
-        nonisolated override func enqueue(_ buffer:CMSampleBuffer) {
+        override func enqueue(_ buffer:CMSampleBuffer) {
             lock.withLock {
                 let time=CMSampleBufferGetPresentationTimeStamp(buffer).seconds
                 times.append(time)
@@ -45,7 +44,7 @@ final class LoopAuditionTests:XCTestCase {
             }
             super.enqueue(buffer)
         }
-        override func flushAndRemoveImage() { imageRemovals += 1; super.flushAndRemoveImage() }
+        override func removeImage() { imageRemovals += 1; super.removeImage() }
     }
     private final class AudioSamples:AVSampleBufferAudioRenderer {
         private let lock=NSLock()
@@ -70,7 +69,7 @@ final class LoopAuditionTests:XCTestCase {
         }
     }
     @MainActor func testDecoderEnforcesExclusiveCutForVideoAndAudioAndRetainsImage() async throws {
-        let video=VideoSamples(), audio=AudioSamples(), player=Playback(video:video,audio:audio)
+        let video=VideoSamples(), audio=AudioSamples(), player=Playback(videoOutput:video,audio:audio)
         defer { player.close() }
         var opened=false
         player.open(fixture("cfr.mp4"),at:1,completion:{ opened=true })
@@ -117,7 +116,7 @@ final class LoopAuditionTests:XCTestCase {
     }
     @MainActor func testReal4KSelectionLoopsContinuouslyWhenProvided() async throws {
         guard let path=ProcessInfo.processInfo.environment["CLIPPER_SAMPLE"] else { throw XCTSkip("Set CLIPPER_SAMPLE to check the original 4K AV1 selection") }
-        let video=VideoSamples(), audio=AudioSamples(), player=Playback(video:video,audio:audio)
+        let video=VideoSamples(), audio=AudioSamples(), player=Playback(videoOutput:video,audio:audio)
         defer { player.close() }
         video.renderClock=player.clock
         var opened=false
@@ -155,7 +154,7 @@ final class LoopAuditionTests:XCTestCase {
         observation.cancel()
     }
     @MainActor func testHundredSingleFramePassesAndWarmResumeKeepTimeline() async throws {
-        let video=VideoSamples(), audio=AudioSamples(), player=Playback(video:video,audio:audio)
+        let video=VideoSamples(), audio=AudioSamples(), player=Playback(videoOutput:video,audio:audio)
         defer { player.close() }
         var opened=false
         player.open(fixture("cfr.mp4"),at:1,completion:{ opened=true })
@@ -221,7 +220,7 @@ final class LoopAuditionTests:XCTestCase {
     }
     @MainActor func testSameFrameSeekAfterPauseKeepsWarmDecoderRunning() async throws {
         let video=VideoSamples()
-        let player=Playback(video:video)
+        let player=Playback(videoOutput:video)
         defer { player.close() }
         var opened=false
         player.open(fixture("cfr.mp4"),at:1,completion:{ opened=true })

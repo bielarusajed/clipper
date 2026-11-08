@@ -6,6 +6,11 @@ import Combine
 @testable import Clipper
 
 final class MediaTests:XCTestCase {
+    @MainActor func testPlaybackRegistersBackgroundSafeVideoRenderer() {
+        let playback=Playback()
+        XCTAssertTrue(playback.clock.renderers.contains { $0 === playback.video.sampleBufferRenderer })
+        XCTAssertFalse(playback.clock.renderers.contains { $0 === playback.video })
+    }
     @MainActor func testSaveAsAcceptsConfirmedExistingOutput() throws {
         let directory=fixture("replace-validation-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true)
@@ -72,14 +77,14 @@ final class MediaTests:XCTestCase {
         XCTAssertFalse(try FileManager.default.contentsOfDirectory(atPath:directory.path).contains(where:{$0.hasPrefix(".clipper-")}))
         editor.close()
     }
-    final class ObservedVideoLayer:AVSampleBufferDisplayLayer {
+    final class ObservedVideoOutput:VideoOutput {
         var imageRemovals=0
-        override func flushAndRemoveImage() { imageRemovals += 1; super.flushAndRemoveImage() }
+        override func removeImage() { imageRemovals += 1; super.removeImage() }
     }
     @MainActor func testPlayPauseRetainsImageAndResumesWithoutSeeking() async throws {
-        let layer=ObservedVideoLayer()
+        let layer=ObservedVideoOutput()
         // Use the same real renderer implementation, observing only image removal.
-        let playback=Playback(video:layer)
+        let playback=Playback(videoOutput:layer)
         let ready=expectation(description:"Opened")
         playback.open(fixture("cfr.mp4"),at:2,completion:{ready.fulfill()})
         await fulfillment(of:[ready],timeout:4)
@@ -420,6 +425,27 @@ final class MediaTests:XCTestCase {
         try await waitUntil { !editor.comparisonPreparing }
         XCTAssertEqual(editor.playback.frame?.time ?? -1,editor.previewStart+editor.previewPosition,accuracy:0.000003)
         editor.close()
+    }
+    @MainActor func testVideoBlendingAndNativeRoundedClipSurviveLayoutChanges() {
+        let source=AVSampleBufferDisplayLayer()
+        let surface=ComparisonSurface.Surface(source:source,player:AVPlayer())
+        defer { ComparisonSurface.dismantleNSView(surface,coordinator:()) }
+        surface.details=MediaDetails(duration:10,origin:0,width:3840,height:2160,rotation:0,pixelAspect:1,fps:60,hdr:false,codec:"av1",audioLabels:[],audioStreams:[])
+        for mode in [PreviewMode.original,.compare,.output,.original] {
+            for size in [CGSize(width:960,height:540),CGSize(width:640,height:360)] {
+                surface.mode=mode; surface.frame=CGRect(origin:.zero,size:size)
+                surface.needsLayout=true; surface.layoutSubtreeIfNeeded()
+                XCTAssertEqual(surface.layer?.cornerRadius,8)
+                XCTAssertEqual(surface.layer?.masksToBounds,true)
+                XCTAssertTrue(surface.sourceViewport.allowsGroupOpacity)
+                XCTAssertEqual(surface.sourceViewport.opacity,0.99,accuracy:0.0001)
+                XCTAssertTrue(source.superlayer === surface.sourceViewport)
+                XCTAssertTrue(surface.sourceViewport.superlayer === surface.layer)
+                XCTAssertTrue(surface.output.superlayer === surface.layer)
+                XCTAssertEqual(surface.sourceViewport.isHidden,mode == .output)
+                XCTAssertEqual(surface.output.isHidden,mode == .original)
+            }
+        }
     }
     @MainActor func testComparisonSurfaceAlignsRoundedCropAndKeepsOneSourceOwner() {
         let source=AVSampleBufferDisplayLayer()

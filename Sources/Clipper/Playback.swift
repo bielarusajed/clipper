@@ -4,8 +4,25 @@ import CMedia
 import Combine
 import CoreImage
 
+/// Keeps background media operations off the CALayer. Tests can observe these
+/// operations while still forwarding to the layer's real video renderer.
+class VideoOutput {
+    let layer:AVSampleBufferDisplayLayer
+    let renderer:AVSampleBufferVideoRenderer
+    init(layer:AVSampleBufferDisplayLayer=AVSampleBufferDisplayLayer()) {
+        self.layer=layer; renderer=layer.sampleBufferRenderer
+    }
+    var isReadyForMoreMediaData:Bool { renderer.isReadyForMoreMediaData }
+    var status:AVQueuedSampleBufferRenderingStatus { renderer.status }
+    var requiresFlushToResumeDecoding:Bool { renderer.requiresFlushToResumeDecoding }
+    func enqueue(_ sample:CMSampleBuffer) { renderer.enqueue(sample) }
+    func flush() { renderer.flush() }
+    func removeImage() { renderer.flush(removingDisplayedImage:true,completionHandler:nil) }
+}
+
 final class Playback: ObservableObject {
     let video:AVSampleBufferDisplayLayer
+    private let videoOutput:VideoOutput
     let audio:AVSampleBufferAudioRenderer
     let clock = AVSampleBufferRenderSynchronizer()
     let queue = DispatchQueue(label:"clipper.decode",qos:.userInteractive)
@@ -85,10 +102,10 @@ final class Playback: ObservableObject {
     private var runStart=0.0
     private var runCompletion:(() -> Void)?
 
-    init(video:AVSampleBufferDisplayLayer=AVSampleBufferDisplayLayer(),audio:AVSampleBufferAudioRenderer=AVSampleBufferAudioRenderer()) {
-        self.video=video; self.audio=audio
+    init(videoOutput:VideoOutput=VideoOutput(),audio:AVSampleBufferAudioRenderer=AVSampleBufferAudioRenderer()) {
+        self.videoOutput=videoOutput; video=videoOutput.layer; self.audio=audio
         video.videoGravity = .resize
-        clock.addRenderer(video)
+        clock.addRenderer(videoOutput.renderer)
         clock.addRenderer(audio)
         clock.delaysRateChangeUntilHasSufficientMediaData = false
         observer = clock.addPeriodicTimeObserver(forInterval:CMTimeMake(value:1,timescale:30),queue:.main) { [weak self] time in
@@ -123,7 +140,7 @@ final class Playback: ObservableObject {
         queue.async { [weak self] in
             guard let self else { return }
             self.running=false; self.primeToken=nil
-            DispatchQueue.main.async { if self.isCurrent(token) { self.video.flushAndRemoveImage() } }
+            DispatchQueue.main.async { if self.isCurrent(token) { self.videoOutput.removeImage() } }
             self.audio.flush()
             if let pending=self.pending, let sample=pending.sample { sample.release() }; self.pending=nil
             if let media=self.media { clip_close(media) }; self.media=nil
@@ -200,7 +217,7 @@ final class Playback: ObservableObject {
             self.running=false; self.primeToken=nil; self.generation=token
             if let sample=self.pending?.sample { sample.release() }; self.pending=nil
             if let media=self.media { clip_close(media) }; self.media=nil
-            DispatchQueue.main.async { if self.isCurrent(token) { self.video.flushAndRemoveImage() } }
+            DispatchQueue.main.async { if self.isCurrent(token) { self.videoOutput.removeImage() } }
             self.audio.flush(); self.backdropTime = .nan
         }
     }
@@ -219,12 +236,12 @@ final class Playback: ObservableObject {
         }
     }
     private func present(_ sample:CMSampleBuffer,point:FramePoint) {
-        video.flush(); audio.flush()
+        videoOutput.flush(); audio.flush()
         warmTransport=false
         requestLock.withLock { frameTimes=[]; timelinePeriod=0; committedEnd=nil; stopAt=nil }
         clock.setRate(0,time:CMTime(seconds:point.time,preferredTimescale:1000000))
         if let attachments=CMSampleBufferGetSampleAttachmentsArray(sample,createIfNecessary:true) as? [NSMutableDictionary] { attachments.first?[kCMSampleAttachmentKey_DisplayImmediately]=true }
-        video.enqueue(sample); position=point.time; frame=point
+        videoOutput.enqueue(sample); position=point.time; frame=point
     }
     /// A preview clock can request new frames without cancelling an in-flight decode.
     /// Only the latest waiting target is retained; normal editing seeks remain separate.
@@ -399,7 +416,7 @@ final class Playback: ObservableObject {
         starting=true
         queue.async { [weak self] in
             guard let self, let m=self.media, self.isCurrent(token) else { return }
-            self.video.flush(); self.audio.flush()
+            self.videoOutput.flush(); self.audio.flush()
             self.clock.setRate(0,time:CMTime(seconds:start,preferredTimescale:1000000))
             if let p=self.pending, let b=p.sample { b.release() }; self.pending=nil
             self.requestLock.withLock { self.frameTimes=[] }
@@ -567,7 +584,7 @@ final class Playback: ObservableObject {
                     continue
                 }
                 let time=sample.time+passOffset.seconds
-                if time>now+0.4 || (sample.kind==1 && !video.isReadyForMoreMediaData) || (sample.kind==2 && !audio.isReadyForMoreMediaData) {
+                if time>now+0.4 || (sample.kind==1 && !videoOutput.isReadyForMoreMediaData) || (sample.kind==2 && !audio.isReadyForMoreMediaData) {
                     pending=sample; finishPrimingIfReady(at:now,atEnd:true); return
                 }
                 let point=sample.kind==1 ? FramePoint(time:sample.time,duration:sample.duration,pts:sample.pts,timeBaseNum:sample.timeBaseNum,timeBaseDen:sample.timeBaseDen) : nil
@@ -577,15 +594,15 @@ final class Playback: ObservableObject {
             let time=value.time+passOffset.seconds
             let stop=requestLock.withLock { stopAt }
             if let stop, time>=stop-0.0000001 { commitEnd(stop); return }
-            if replayIndex != nil && (time>now+0.4 || (value.kind==1 && !video.isReadyForMoreMediaData) || (value.kind==2 && !audio.isReadyForMoreMediaData)) {
+            if replayIndex != nil && (time>now+0.4 || (value.kind==1 && !videoOutput.isReadyForMoreMediaData) || (value.kind==2 && !audio.isReadyForMoreMediaData)) {
                 // Only replay reaches this path; decoded values were checked before consumption.
                 finishPrimingIfReady(at:now,atEnd:true); return
             }
             if replayIndex != nil { replayIndex! += 1 }
             guard let buffer=scheduled(value) else { continue }
             if value.kind==1 {
-                if video.status == .failed || video.requiresFlushToResumeDecoding { video.flush() }
-                video.enqueue(buffer); primedVideo=true
+                if videoOutput.status == .failed || videoOutput.requiresFlushToResumeDecoding { videoOutput.flush() }
+                videoOutput.enqueue(buffer); primedVideo=true
                 if let point=value.frame {
                     requestLock.withLock {
                         frameTimes.append(TimedFrame(timeline:time,frame:point))

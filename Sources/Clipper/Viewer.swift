@@ -136,8 +136,13 @@ struct ComparisonSurface:NSViewRepresentable {
         init(source:AVSampleBufferDisplayLayer,player:AVPlayer) {
             self.source=source; output=AVPlayerLayer(player:player)
             super.init(frame:.zero)
-            wantsLayer=true; layer=CALayer(); layer?.backgroundColor=NSColor.black.cgColor
+            layer=CALayer(); wantsLayer=true; layer?.backgroundColor=NSColor.black.cgColor
+            // Clip native video layers too, not only the surrounding SwiftUI content.
+            layer?.cornerRadius=8; layer?.masksToBounds=true
             sourceViewport.masksToBounds=true
+            // Slight group blending avoided opaque-video flicker in the on-device
+            // A/B test. This affects the source preview only, never exported pixels.
+            sourceViewport.allowsGroupOpacity=true; sourceViewport.opacity=0.99
             sourceViewport.addSublayer(source); sourceViewport.addSublayer(subtitleLayer); layer?.addSublayer(sourceViewport)
             subtitleLayer.contentsGravity = .resize
             let timer=DispatchSource.makeTimerSource(queue:.main)

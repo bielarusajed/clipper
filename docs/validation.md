@@ -1,5 +1,19 @@
 # Validation and known limits
 
+## 0.5.3 preview compositing workaround
+
+The user reproduced black rectangular occlusions without screen recording, and reported that they stopped while recording. Migrating to the background-safe video renderer and removing the outer SwiftUI mask did not resolve the symptom. A subsequent same-app test toggled source-viewport group opacity between 1 and 0.99 without screen recording. The user marked three glitches at opacity 1 and reported none with 0.99 blending enabled.
+
+At all three markers, the source geometry covered the viewport, the output layer was hidden with no wipe mask, and the renderer was ready with no error or flush requirement. Sampled displayed-buffer brightness did not show a black right-hand region. These observations support a presentation/compositing issue; they do not establish an undocumented macOS direct-presentation mechanism as the cause.
+
+Production now enables group opacity at 0.99 on the source viewport. This slightly dims the source preview, including its subtitle overlay, but does not change decoded or exported pixels. Output preview remains at full opacity. The native root layer clips both video layers to an eight-point corner radius, alongside the restored SwiftUI rounded clip and border. The square corners in the diagnostic app came from intentionally removing its outer mask. The normal app contains no diagnostic menu or logging.
+
+A regression for persistent blending and native rounded clipping failed before the change and passed afterward. Three focused tests passed, covering the renderer registration, crop/comparison geometry, source-layer ownership, and blending/clipping across Original, Compare and Output modes and resizing. The earlier renderer migration ran 44 media/loop tests with four optional source checks skipped and no failures; three additional startup, chase and continuous-loop checks passed using the reported 4K AV1 source. The successful blend experiment is user-observed; the final blend-plus-rounded-corners build still needs confirmation in normal use.
+
+Playback uses the display layer's `AVSampleBufferVideoRenderer` for synchronizer registration and all enqueue, flush, readiness and status operations, following the SDK's documented background-enqueue path available on macOS 14. A `VideoOutput` adapter preserves real-renderer transport test coverage. The native view assigns its root layer before enabling layer hosting. Timing flags, decoder selection and glass composition are unchanged.
+
+Earlier capture-based negative tests cannot establish that the flicker is absent: screen recording appears to suppress it. The isolated test apps and detailed investigation report remain in ignored build directories for reference.
+
 ## 0.5.2 Compact window
 
 The integrated run passed 177 tests, with five opt-in checks skipped and zero failures, in 188.1 seconds. It included the supplied 4K AV1 WebM. After the final review fixes, seven focused window, timeline and comparison-layer tests passed. Logs are `.build/compact-full-tests.log` and `.build/compact-final-window-tests.log`.
