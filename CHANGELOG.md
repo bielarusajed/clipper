@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.4 · 8 November 2026
+
+- Restore the current macOS appearance of native window controls. Pin the SwiftPM build engine and reject binaries whose linked SDK differs from the selected SDK; a build-engine change had stamped recent apps with SDK 14.0 despite compiling against SDK 27.2.
+- Preserve the Compact layout and native hover behavior. The minimum supported macOS remains 14.
+
+## 0.5.3 · 8 November 2026
+
+- Mitigate source-preview compositing flicker with slight group blending, and restore rounded video clipping. Exported pixels are unchanged.
+
 ## 0.5.2 · 7 November 2026
 
 - Adopt the Compact window layout, with 8-point panel gaps and native traffic lights inside the inspector header. Remove the separate title strip and prototype switcher.

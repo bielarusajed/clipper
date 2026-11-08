@@ -1,5 +1,13 @@
 # Validation and known limits
 
+## 0.5.4 native control appearance
+
+Archived binaries establish that the SDK stamp changed from 27.2 to 14.0 when SwiftPM switched to its `swiftbuild` engine, before the Compact window work. Packaged and unbundled binaries agree, ruling out signing and library packaging. Restoring the `native` engine produces `minos 14.0 / sdk 27.2` with the same window code. The new packaging guard rejects the actual regressed binary and accepts the rebuilt binary, including equivalent version spellings such as 27.2.0.
+
+Five native window tests pass, including AppKit ownership, shared hover tracking and measured filename clearance. Computer-use screenshots show the larger, shaded native controls in both the empty and loaded-video layouts; these captures show inactive gray controls, so colored hover and tiling were not visually reverified. The user confirmed correct hover before this build-only correction. Claude reviewed the diagnosis and build changes. Logs are `.build/sdk-appearance-build.log` and `.build/sdk-appearance-window-tests.log`.
+
+The integrated run with the supplied 4K AV1 file executed 180 tests in 166.7 seconds, with five skipped and three failures. All failures are playback-clock thresholds in `testHundredSingleFramePassesAndWarmResumeKeepTimeline`, `testLoopClockNeverStopsOrRewindsAcrossWraps` and `testSubtitleCueReturnsAfterContinuousLoopWraps`. Rerunning these three against the untouched pre-change Swift Build test bundle also fails all three. They remain unresolved; the suite is not fully green. Logs are `.build/sdk-appearance-full-tests.log` and `.build/sdk-appearance-baseline-loop-tests.log`. The packaging guard also rejects a deployment target inconsistent with the plist's minimum system version.
+
 ## 0.5.3 preview compositing workaround
 
 The user reproduced black rectangular occlusions without screen recording, and reported that they stopped while recording. Migrating to the background-safe video renderer and removing the outer SwiftUI mask did not resolve the symptom. A subsequent same-app test toggled source-viewport group opacity between 1 and 0.99 without screen recording. The user marked three glitches at opacity 1 and reported none with 0.99 blending enabled.

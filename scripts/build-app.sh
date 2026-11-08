@@ -7,9 +7,13 @@ export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
 export CLANG_MODULE_CACHE_PATH="$ROOT/.build/ModuleCache"
 export SWIFTPM_MODULECACHE_OVERRIDE="$ROOT/.build/ModuleCache"
 if ! bash scripts/check-media.sh; then bash scripts/build-media.sh; fi
-SWIFT_BUILD=(xcrun swift build --disable-sandbox --scratch-path .build/swift --cache-path .build/cache -c release -debug-info-format none)
+# Swift 6.4's swiftbuild engine can stamp the deployment target as the SDK,
+# opting AppKit out of its current appearance. Keep the native engine until fixed.
+SWIFT_BUILD=(xcrun swift build --build-system native --disable-sandbox --scratch-path .build/swift --cache-path .build/cache -c release -debug-info-format none)
 "${SWIFT_BUILD[@]}"
 BIN_DIR="$("${SWIFT_BUILD[@]}" --show-bin-path)"
+python3 scripts/check-app-sdk.py "$BIN_DIR/Clipper" "$(xcrun --sdk macosx --show-sdk-version)" \
+  "$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' assets/Info.plist)"
 if [[ ! -f .build/Clipper.icns || scripts/make-icon.swift -nt .build/Clipper.icns ]]; then
   xcrun swift scripts/make-icon.swift
   iconutil -c icns .build/Clipper.iconset -o .build/Clipper.icns
