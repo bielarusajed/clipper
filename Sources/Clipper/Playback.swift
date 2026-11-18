@@ -32,6 +32,11 @@ final class Playback: ObservableObject {
     private var decodeFloor = 0.0
     private var running = false
     private var warmTransport=false
+    private(set) var speed:ClipSpeed = .normal
+    func setSpeed(_ speed:ClipSpeed) {
+        self.speed=speed
+        if playing && warmTransport { clock.setRate(Float(speed.rawValue),time:.invalid) }
+    }
     private struct TimedFrame { var timeline:Double; var frame:FramePoint }
     private var frameTimes:[TimedFrame]=[]
     private let loopPreparation=LoopPreparation()
@@ -104,6 +109,7 @@ final class Playback: ObservableObject {
 
     init(videoOutput:VideoOutput=VideoOutput(),audio:AVSampleBufferAudioRenderer=AVSampleBufferAudioRenderer()) {
         self.videoOutput=videoOutput; video=videoOutput.layer; self.audio=audio
+        audio.audioTimePitchAlgorithm = .spectral
         video.videoGravity = .resize
         clock.addRenderer(videoOutput.renderer)
         clock.addRenderer(audio)
@@ -408,7 +414,7 @@ final class Playback: ObservableObject {
         playing=true
         if starting { return }
         if warmTransport {
-            clock.setRate(1,time:.invalid)
+            clock.setRate(Float(speed.rawValue),time:.invalid)
             queue.async { [weak self] in guard let self else { return }; self.running=true; self.pump() }
             return
         }
@@ -621,7 +627,7 @@ final class Playback: ObservableObject {
             guard self.isCurrent(token) else { return }
             self.starting=false; self.warmTransport=true
             if self.playing {
-                self.clock.setRate(1,time:.invalid)
+                self.clock.setRate(Float(self.speed.rawValue),time:.invalid)
                 self.queue.async { [weak self] in guard let self, self.isCurrent(token) else { return }; self.running=true }
             }
         }

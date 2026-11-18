@@ -14,13 +14,15 @@ Scrub the filmstrip or drag the amber selection edges. Left/Right steps one deco
 
 Zoom with the slider, Cmd-plus/Cmd-minus, or a trackpad pinch over the timeline. Cmd-0 fits the whole video. The scrollbar stays visible while there is something to scroll. The episode overview pans the detailed timeline without changing the clip.
 
-Cmd-Z and Shift-Cmd-Z undo and redo trim, crop, resolution, codec, quality, HDR conversion and audio edits. Each completed drag is one entry. Opening or closing a source clears history; text fields keep native text undo. Subtitle controls and timeline navigation are outside edit history. Undo waits for an active edit or frame seek to finish.
+Cmd-Z and Shift-Cmd-Z undo and redo trim, speed, crop, resolution, codec, quality, HDR conversion and audio edits. Each completed drag is one entry. Opening or closing a source clears history; text fields keep native text undo. Subtitle controls and timeline navigation are outside edit history. Undo waits for an active edit or frame seek to finish.
+
+Speed in the Clip section slows or speeds up the selected clip, from 0.25× to 4×. It affects playback, encoded previews and exports, and keeps audio pitch unchanged. The section shows the resulting output duration. Start, End and the timeline still use source timestamps, and frame stepping still moves one source frame. Each new video starts at 1×.
 
 ## Listen around the cut
 
 Enable Loop Selection with the repeat button or Cmd-L, then press Space. Original repeats the selection; Compare and Output repeat the available encoded sample. Original prepares the next pass in another decoder. A Rewind gap indicator appears when preparation cannot keep up.
 
-The cut-audition button or Shift-Cmd-L plays the last second before the out boundary once, then holds the last included frame. Shorter selections play in full. Audition uses Original if the encoded sample does not reach the cut. Markers stay unchanged.
+The cut-audition button or Shift-Cmd-L plays the last output second before the out boundary once, then holds the last included frame. Shorter selections play in full. Audition uses Original if the encoded sample does not reach the cut. Markers stay unchanged.
 
 Pausing, seeking, stepping, moving a marker or switching modes interrupts the run. Loop stays enabled until switched off or the source closes. Settings changes keep Original playing where possible; invalidating an encoded sample returns to paused Original.
 
@@ -30,13 +32,13 @@ The waveform button beside the zoom controls, or View → Show Audio Waveform, s
 
 Choose Original, 16:9, 9:16, 1:1, 4:5 or a custom width:height ratio. Drag the crop to reposition it or use its lower-right handle to resize it. Resolution presets limit the longest edge and never enlarge the crop.
 
-SDR starts with H.264 at balanced quality. H.265 is also available. Explicit codec and quality choices are remembered between videos and launches. HDR temporarily selects HEVC Main10 without changing the preferred SDR codec; Convert to SDR restores that preference. Trim, crop, resolution and audio reset for each video.
+SDR starts with H.264 at balanced quality. H.265 is also available. Explicit codec and quality choices are remembered between videos and launches. HDR temporarily selects HEVC Main10 without changing the preferred SDR codec; Convert to SDR restores that preference. Trim, speed, crop, resolution and audio reset for each video.
 
-Both codecs use hardware encoding only. An unsupported size produces an error. All exports re-encode the video and preserve source frame timing; the quality slider does not promise a particular file size.
+Both codecs use hardware encoding only. An unsupported size produces an error. All exports re-encode the video and preserve every selected frame, with source timing scaled by Speed. The quality slider does not promise a particular file size.
 
 Exclude audio mutes the export. A track picker appears only when there is more than one source audio track; the whole audio section is hidden without audio. Included audio exports as stereo AAC.
 
-Preview 5 s renders up to five seconds from the playhead within the selected clip using the export settings. Original, Compare and Output become available after rendering. Compare's draggable wipe shows the original crop beside the encoded result. Frame steps align both sides. Editing invalidates the sample.
+Preview 5 s renders up to five output seconds from the playhead within the selected clip using the export settings. Original, Compare and Output become available after rendering. Compare's draggable wipe shows the original crop beside the encoded result. Frame steps align both sides. Editing invalidates the sample.
 
 ## Burn in subtitles
 

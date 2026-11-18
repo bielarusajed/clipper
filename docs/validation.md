@@ -1,5 +1,13 @@
 # Validation and known limits
 
+## Clip speed control
+
+Six focused speed tests pass. Hardware exports cover H.264 and H.265 at 0.25×, 0.75×, 1.5× and 4× across constant-frame-rate, variable-frame-rate and offset-timestamp sources. Decoded output keeps every selected frame and its scaled timestamp; the 440 Hz fixture retains its pitch and expected audio duration. Other checks cover muted single-frame duration, subtitle cue timing, live speed changes and loops, warm resume, undo/redo, per-source reset, five-second output previews, Compare steps and mode changes, marking from encoded previews, invalidation and cut audition.
+
+The release app builds and passes signature, linked SDK 27.2 and macOS 14 deployment-target verification. Bundled filter/bitstream-filter capabilities, shell syntax, plist validity and whitespace checks pass. Native tests need media access outside the restricted sandbox. Manual listening, onscreen layout inspection and user testing remain pending.
+
+The final integrated run executed 186 tests, with nine skipped and two failures. All six speed tests pass. The failures are the existing wall-clock thresholds in `testHundredSingleFramePassesAndWarmResumeKeepTimeline` and `testLoopClockNeverStopsOrRewindsAcrossWraps`, also recorded against the unchanged baseline under 0.5.4 below. The full suite is not green. Logs are `.build/clip-speed-final-tests.log`, `.build/clip-speed-final-full-tests.log` and `.build/clip-speed-build.log`.
+
 ## 0.5.5 concentric islands
 
 The inspector and timeline use Apple's `ConcentricRectangle` with uniform corners and an 8-point minimum. The native window outline is unchanged. Reduced Transparency uses the same shape with an opaque background; macOS 14/15 retain a fixed 8-point fallback. The empty-state icon keeps its separate fixed shape.
