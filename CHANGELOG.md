@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.0 · 18 November 2026
 
 - Add per-clip speed presets from 0.25× to 4× for playback, previews and exports, with pitch-preserving audio and undo/redo. Show output duration while keeping trim points and the timeline in source time.
 
