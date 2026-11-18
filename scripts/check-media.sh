@@ -6,6 +6,9 @@ test -x .build/media/bin/ffmpeg
 test -f .build/media/lib/libass.9.dylib
 grep -q '^CONFIG_ASS_FILTER=yes$' .build/media/config.mak
 grep -q '^CONFIG_ASS_ENCODER=yes$' .build/media/config.mak
+grep -q '^CONFIG_ATEMPO_FILTER=yes$' .build/media/config.mak
+grep -q '^CONFIG_SETTB_FILTER=yes$' .build/media/config.mak
+grep -q '^CONFIG_SETTS_BSF=yes$' .build/media/config.mak
 grep -q '^CONFIG_SECURETRANSPORT=yes$' .build/media/config.mak
 grep -q '^CONFIG_HTTPS_PROTOCOL=yes$' .build/media/config.mak
 test "$(cat .build/media/tls-patch.sha256)" = "$(shasum -a 256 patches/ffmpeg-8.0.1-tls-verify-default.patch | awk '{print $1}')"

@@ -116,11 +116,20 @@ struct EditorView:View {
             ScrollView {
                 VStack(spacing:16) {
                     if let details=playback.details {
-                        section("Clip",detail:String(format:"%.3f s",editor.clipDuration)) {
+                        section("Clip",detail:String(format:"%.3f s output",editor.outputDuration)) {
                             C1Group {
                                 boundaryRow("Start",isStart:true,text:$startText,value:editor.inTime)
                                 rowDivider
                                 boundaryRow("End",isStart:false,text:$endText,value:editor.end?.time ?? 0)
+                                rowDivider
+                                HStack {
+                                    Text("Speed")
+                                    Spacer(minLength:4)
+                                    Picker("Clip speed",selection:setting(\.speed,"Speed")) {
+                                        ForEach(ClipSpeed.allCases) { Text($0 == .normal ? "1× (Normal)" : $0.label).tag($0) }
+                                    }.labelsHidden().fixedSize()
+                                        .help("Change playback and export speed. Audio keeps its pitch; Start and End use source time.")
+                                }.font(.system(size:12)).controlSize(.small).padding(.horizontal,10).frame(height:36)
                                 rowDivider
                                 HStack {
                                     Text(editor.importTimeNote ?? "Snap to source frames").help(editor.importTimeNote ?? "Snap to source frames").lineLimit(1)

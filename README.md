@@ -14,7 +14,7 @@ Builds are currently ad-hoc signed. A shared copy may need approval in System Se
 
 1. Drop a video, use Open Video, or paste a video URL with Cmd-V.
 2. Use Space to play, Left/Right to step frames, and I/O to mark the first and last included frames.
-3. Adjust crop, resolution, quality or audio. Preview 5 s renders an actual sample for Original/Compare/Output inspection.
+3. Adjust speed, crop, resolution, quality or audio. Preview 5 s renders an actual sample for Original/Compare/Output inspection.
 4. Export Clip saves beside a local source. The folder segment opens Save As. URL imports always ask where to save.
 
 The editor also supports undo/redo, selection looping, cut audition, an optional audio waveform, copy/drag of exported files, remembered export preferences, rough URL range imports and burned-in subtitles.

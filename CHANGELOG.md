@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Add per-clip speed presets from 0.25× to 4× for playback, previews and exports, with pitch-preserving audio and undo/redo. Show output duration while keeping trim points and the timeline in source time.
+
 ## 0.5.5 · 8 November 2026
 
 - Match the inspector and timeline island corners to the native window's corners and inset. Use system concentric shapes on macOS 26 and later, with an 8-point minimum and fallback on older systems.

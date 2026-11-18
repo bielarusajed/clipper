@@ -50,7 +50,8 @@ import UniformTypeIdentifiers
     private var previewCoversCut:Bool { previewStart+previewDuration >= outTime-0.000001 }
     private var encodedDuration:Double {
         let duration=outputPlayer.currentItem?.duration.seconds ?? .nan
-        return duration.isFinite && duration>0 ? min(duration,previewDuration) : previewDuration
+        let expected=edit.speed.outputTime(previewDuration)
+        return duration.isFinite && duration>0 ? min(duration,expected) : expected
     }
     @Published private(set) var comparisonPreparing=false
     @Published var previewStart=0.0
@@ -81,12 +82,13 @@ import UniformTypeIdentifiers
     private var nudgeRunning=false
     private var nudgeEpoch=UUID()
     var showOutput:Bool { previewMode == .output }
-    var displayedPosition:Double { previewMode == .original ? playback.position : previewStart+previewPosition }
+    var displayedPosition:Double { previewMode == .original ? playback.position : previewStart+edit.speed.sourceTime(previewPosition) }
     var isPlaying:Bool { previewMode == .original ? playback.transportWanted : auditioning || previewPlaying || desiredPreviewPlay }
     var details: MediaDetails? { playback.details }
     var inTime: Double { start?.time ?? 0 }
     var outTime: Double { min(end?.end ?? details?.duration ?? 0,details?.duration ?? 0) }
     var clipDuration: Double { max(0,outTime-inTime) }
+    var outputDuration:Double { edit.speed.outputTime(clipDuration) }
     var canExport: Bool { source != nil && start != nil && end != nil && clipDuration > 0 && !loading && !playback.seeking && !previewStepRunning && !exporting && !importPresented && subtitles.ready && !(subtitles.enabled && details?.hdr == true && !edit.convertToSDR) }
 
     // This manager never becomes the window/field editor manager. Text keeps native undo.
@@ -168,6 +170,7 @@ import UniformTypeIdentifiers
         let old=snapshot
         interruptTransport(); invalidatePreview(); playback.pause()
         start=value.start; end=value.end; edit=value.settings
+        playback.setSpeed(edit.speed)
         playback.endTime=outTime
         let target=old.start != start ? inTime : old.end != end ? end?.time ?? inTime : playback.position
         applyAudio(previous:old.settings,at:target)
@@ -192,6 +195,7 @@ import UniformTypeIdentifiers
         guard next != edit else { return }
         cancelNudges(); invalidatePreview()
         edit=next
+        playback.setSpeed(edit.speed)
         applyAudio(previous:before.settings,at:playback.position)
         if let details { subtitles.rebuild(details:details,edit:edit) }
         refreshWaveform()
@@ -278,6 +282,7 @@ import UniformTypeIdentifiers
         let id=UUID(); loadingID=id; loading=true
         invalidatePreview(); source=url; start=nil; end=nil; edit=preferences.makeSettings(); error=nil; exportedClip.set(nil); nextOutputURL=uniqueOutput(for:url)
         playback.setMuted(false)
+        playback.setSpeed(edit.speed)
         playback.open(url,onFailure:{ [weak self] in self?.loading=false }) { [weak self] in
             guard let self, self.loadingID==id, let info=self.details else { return }
             if let timeline=self.importTimeline, abs(timeline.localOrigin-info.origin) >= 0.002 {
@@ -313,6 +318,7 @@ import UniformTypeIdentifiers
         if let previous { playback.queue.async { withExtendedLifetime(previous) {} } }
         importTimeline=nil; importTimeNote=nil
         source=nil; start=nil; end=nil; edit=preferences.makeSettings(); exportedClip.set(nil); nextOutputURL=nil; error=nil
+        playback.setSpeed(edit.speed)
     }
     func prepareToQuit() {
         let download=temporarySource
@@ -380,7 +386,7 @@ import UniformTypeIdentifiers
             afterPreviewSteps.append { [weak self] in self?.resolveBoundary(time,start:start,gesture:gesture,epoch:epoch) }; return
         }
         if time == nil, previewMode != .original {
-            let t=previewStart+currentOutputTime
+            let t=outputSourceTime
             invalidatePreview(); resolveBoundary(t,start:start,gesture:gesture,epoch:epoch); return
         }
         if time == nil && playback.seeking {
@@ -468,14 +474,14 @@ import UniformTypeIdentifiers
         interruptTransport(); auditioning=true
         let operation=transportOperation
         if previewMode == .original {
-            playback.playRange(from:max(inTime,outTime-1),until:outTime,loopStart:inTime,looping:false,onEnd:{ [weak self] in
+            playback.playRange(from:max(inTime,outTime-edit.speed.sourceTime(1)),until:outTime,loopStart:inTime,looping:false,onEnd:{ [weak self] in
                 guard self?.transportOperation==operation else { return }; self?.auditioning=false
             })
         } else {
             // Resolve through source timestamps so VFR auditions begin on a whole frame.
-            playback.seek(previewStart+max(0,encodedDuration-1),onFailure:{ [weak self] in self?.interruptTransport() }) { [weak self] in
+            playback.seek(previewStart+edit.speed.sourceTime(max(0,encodedDuration-1)),onFailure:{ [weak self] in self?.interruptTransport() }) { [weak self] in
                 guard let self, self.transportOperation==operation else { return }
-                self.seekOutput(max(0,(self.playback.frame?.time ?? self.previewStart)-self.previewStart),playAfter:true)
+                self.seekOutput(max(0,self.edit.speed.outputTime((self.playback.frame?.time ?? self.previewStart)-self.previewStart)),playAfter:true)
             }
         }
     }
@@ -507,14 +513,19 @@ import UniformTypeIdentifiers
         guard mode == .original || (previewReady && previewURL != nil && !loading && !exporting) else { return }
         guard mode != previewMode else { return }
         settlePendingEdit(); cancelNudges(); interruptTransport()
-        let time=previewMode == .original ? max(0,min(playback.position-previewStart,max(0,previewDuration-0.000002))) : currentOutputTime
+        let time=previewMode == .original ? edit.speed.outputTime(max(0,min(playback.position-previewStart,max(0,previewDuration-0.000002)))) : currentOutputTime
         stopPreviewTracking(); outputPlayer.pause(); playback.pause()
         previewMode=mode; playback.setMuted(mode == .compare ? true : edit.muted)
-        if mode == .original { playback.seek(min(outTime-0.000002,previewStart+previewDuration-0.000002,previewStart+time+0.000002)) }
+        if mode == .original { playback.seek(previewSourceTime(time)) }
         else { startPreviewTracking(); seekOutput(time,playAfter:false) }
     }
     private var outputSourceTime:Double {
-        min(outTime-0.000002,previewStart+previewDuration-0.000002,previewStart+currentOutputTime+0.000002)
+        previewSourceTime(currentOutputTime)
+    }
+    private func previewSourceTime(_ outputTime:Double)->Double {
+        // Encoder and AVPlayer timestamps can round down by a microsecond. Apply
+        // that tolerance in output time before mapping back to a source frame.
+        min(outTime-0.000002,previewStart+previewDuration-0.000002,previewStart+edit.speed.sourceTime(outputTime+0.000002))
     }
     private var currentOutputTime:Double {
         let time=outputPlayer.currentTime().seconds
@@ -600,7 +611,7 @@ import UniformTypeIdentifiers
             guard let self, valid() else { return }
             self.playback.step(direction,onFailure:failure) { [weak self] in
                 guard let self, valid(), let frame=self.playback.frame else { return }
-                let time=max(0,min(frame.time-self.previewStart,self.previewDuration-0.000002))
+                let time=self.edit.speed.outputTime(max(0,min(frame.time-self.previewStart,self.previewDuration-0.000002)))
                 self.outputPlayer.seek(to:CMTime(seconds:time,preferredTimescale:1000000),toleranceBefore:.zero,toleranceAfter:.zero) { [weak self] finished in
                     Task { @MainActor in
                         guard let self, valid() else { return }
@@ -631,9 +642,10 @@ import UniformTypeIdentifiers
         settlePendingEdit()
         guard canExport else { return }
         let beginning=min(max(playback.position,inTime),max(inTime,outTime-0.000001))
-        // At the selected end, start up to five seconds earlier for a useful sample.
-        let from=outTime-beginning < 0.05 ? max(inTime,outTime-5) : beginning
-        let duration=min(5,outTime-from)
+        // Sample up to five output seconds, using source time for frame boundaries.
+        let sampleLength=edit.speed.sourceTime(5)
+        let from=outTime-beginning < 0.05 ? max(inTime,outTime-sampleLength) : beginning
+        let duration=min(sampleLength,outTime-from)
         let url=FileManager.default.temporaryDirectory.appendingPathComponent("clipper-preview-\(UUID().uuidString).mp4")
         encode(destination:url,start:from,end:from+duration,isPreview:true)
     }

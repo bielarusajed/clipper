@@ -62,6 +62,7 @@ struct ExportRequest {
     let destination: URL
 
     var subtitles: RenderSubtitles? = nil
+    var outputDuration:Double { edit.speed.outputTime(end-start) }
 
     func arguments() throws -> [String] {
         guard start >= 0, end > start, end <= details.duration+0.1 else { throw ExportFailure.message("Choose a non-empty clip inside the video.") }
@@ -97,12 +98,29 @@ struct ExportRequest {
             if !subtitles.preserve { filters += [subtitles.filter] }
             filters += ["setpts=PTS-(\(number(absoluteStart-subtitleZero)))/TB"]
         }
+        // Burn cues on the source clock before changing the clip's timing.
+        if edit.speed != .normal {
+            filters += ["settb=AVTB","setpts=PTS/\(number(edit.speed.rawValue))"]
+        }
         args += ["-vf",filters.joined(separator:","),"-c:v",edit.codec.encoder,"-allow_sw","0","-realtime","0","-q:v",String(Int(edit.quality)),"-pix_fmt",keepHDR ? "p010le" : "nv12","-fps_mode","passthrough"]
+        if edit.speed != .normal {
+            // Keep VFR timestamps precise. Scale packet durations too so the last
+            // frame ends at the new rate without resampling or duplicating frames.
+            // VideoToolbox may leave packet duration unset; use the source's
+            // nominal frame duration in that case, as normal-speed export does.
+            args += ["-enc_time_base:v","filter","-bsf:v","setts=duration='if(DURATION,DURATION,1/(\(number(details.fps))*TB))/\(number(edit.speed.rawValue))'"]
+        }
         if edit.codec == .hevc { args += ["-tag:v","hvc1","-profile:v",keepHDR ? "main10" : "main"] }
         if details.hdr && edit.convertToSDR { args += ["-color_primaries","bt709","-color_trc","bt709","-colorspace","bt709"] }
         if subtitles != nil && !details.hdr && details.colorSpace == 2 && details.width >= 1280 { args += ["-colorspace","bt709"] }
         if !edit.muted && details.audioStreams.indices.contains(edit.audioTrack) {
-            args += ["-map","0:\(details.audioStreams[edit.audioTrack])","-af","atrim=start=\(number(absoluteStart)):end=\(number(absoluteEnd)),asetpts=PTS-(\(number(absoluteStart)))/TB","-c:a","aac_at","-b:a","192k","-ac","2"]
+            var audioFilters=["atrim=start=\(number(absoluteStart)):end=\(number(absoluteEnd))","asetpts=PTS-(\(number(absoluteStart)))/TB"]
+            audioFilters += edit.speed.audioTempos.map { "atempo=\(number($0))" }
+            if edit.speed != .normal {
+                // atempo retains the first PTS; scale a delayed track's offset too.
+                audioFilters += ["asetpts=PTS-STARTPTS+STARTPTS/\(number(edit.speed.rawValue))"]
+            }
+            args += ["-map","0:\(details.audioStreams[edit.audioTrack])","-af",audioFilters.joined(separator:","),"-c:a","aac_at","-b:a","192k","-ac","2"]
         } else { args += ["-an"] }
         args += ["-sn","-dn","-map_metadata","-1","-movflags","+faststart","-progress","pipe:1","-nostats",destination.path]
         return args
@@ -136,7 +154,7 @@ final class EncoderProcess: @unchecked Sendable {
                 guard !data.isEmpty else { return }
                 let lines=text.appendProgress(String(decoding:data,as:UTF8.self))
                 for line in lines where line.hasPrefix("out_time_us=") {
-                    if let n=Double(line.dropFirst(12)) { progress(min(0.99,max(0,n/1000000/(request.end-request.start)))) }
+                    if let n=Double(line.dropFirst(12)) { progress(min(0.99,max(0,n/1000000/request.outputDuration))) }
                 }
             }
             errors.fileHandleForReading.readabilityHandler = { h in text.appendError(h.availableData) }

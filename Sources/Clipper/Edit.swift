@@ -11,6 +11,23 @@ enum VideoCodec: String, CaseIterable, Identifiable {
     var id: Self { self }
     var encoder: String { self == .h264 ? "h264_videotoolbox" : "hevc_videotoolbox" }
 }
+enum ClipSpeed: Double, CaseIterable, Identifiable {
+    case quarter = 0.25, half = 0.5, threeQuarters = 0.75, normal = 1
+    case oneAndQuarter = 1.25, oneAndHalf = 1.5, double = 2, quadruple = 4
+    var id: Self { self }
+    var label: String { rawValue.formatted(.number.precision(.fractionLength(0...2)))+"×" }
+    func outputTime(_ sourceTime:Double)->Double { sourceTime/rawValue }
+    func sourceTime(_ outputTime:Double)->Double { outputTime*rawValue }
+    /// Keep every tempo stage within 0.5...2 to preserve audio samples and pitch.
+    var audioTempos:[Double] {
+        switch self {
+        case .quarter: return [0.5,0.5]
+        case .quadruple: return [2,2]
+        case .normal: return []
+        default: return [rawValue]
+        }
+    }
+}
 enum Resolution: String, CaseIterable, Identifiable {
     case original = "Original", uhd = "4K", qhd = "1440p", hd = "1080p", small = "720p", tiny = "480p"
     var id: Self { self }
@@ -51,6 +68,7 @@ struct EditSettings: Equatable {
     var codec: VideoCodec = .h264
     var resolution: Resolution = .original
     var quality: Double = 65
+    var speed: ClipSpeed = .normal
     var cropPreset: CropPreset = .original
     var crop: CGRect = CGRect(x: 0, y: 0, width: 1, height: 1)
     var customWidth: Double = 16
