@@ -7,6 +7,11 @@ interface Props {
 }
 const { title, description } = Astro.props;
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const site = Astro.site ?? Astro.url;
+const canonical = new URL(Astro.url.pathname, site).href;
+const ogImage = new URL(`${base}/og.png`, site).href;
+const ogImageAlt =
+  'Clipper: “Cut on the frame you meant.” beside the Clipper window editing a clip of Earth from space.';
 ---
 
 <!doctype html>
@@ -16,8 +21,20 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{title}</title>
     <meta name="description" content={description} />
+    <link rel="canonical" href={canonical} />
+    <!-- Link previews (LinkedIn, Slack, iMessage, X). public/og.png comes from scripts/make-og.mjs. -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Clipper" />
+    <meta property="og:url" content={canonical} />
     <meta property="og:title" content={title} />
     <meta property="og:description" content={description} />
+    <meta property="og:image" content={ogImage} />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content={ogImageAlt} />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:image" content={ogImage} />
+    <meta name="twitter:image:alt" content={ogImageAlt} />
     <meta name="color-scheme" content="light dark" />
     <!-- Full-bleed, no transparent corners: Safari puts a white plate behind transparent favicons. -->
     <link rel="icon" href={`${base}/icon.svg`} type="image/svg+xml" />
