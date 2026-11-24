@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.2 · 24 November 2026
+
+- Truncate long inspector popup titles so they fit in the panel. Tooltips show the full titles.
+- Remove the rough-range hint from the URL import dialog.
+
 ## 0.6.1 · 24 November 2026
 
 - Fix low-contrast inspector controls on glass. Speed, Resolution, Audio and Subtitle track pickers and the subtitle buttons now use neutral native styling instead of blue text on a faint blue bezel, and the selected Framing preset uses a neutral highlight. Blue remains for primary actions, the codec selection and the quality slider.

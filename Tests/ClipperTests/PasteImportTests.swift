@@ -392,12 +392,13 @@ final class PasteImportTests:XCTestCase {
         defer { controller.close(); parent.close() }
         controller.showWindow(nil)
         let window=try XCTUnwrap(controller.window)
-        window.contentView?.layoutSubtreeIfNeeded()
+        let content=try XCTUnwrap(window.contentView)
+        content.layoutSubtreeIfNeeded()
         try await Task.sleep(for:.milliseconds(50))
         let compact=window.frame.height
+        let compactContentHeight=content.fittingSize.height
         model.rangeEnabled=true; model.rangeStart="08:00"; model.rangeEnd="08:30"
-        try await waitUntil { window.frame.height > compact+60 }
-        let content=try XCTUnwrap(window.contentView)
+        try await waitUntil { window.frame.height > compact && content.fittingSize.height > compactContentHeight }
         XCTAssertGreaterThanOrEqual(content.bounds.height,content.fittingSize.height-1)
         XCTAssertEqual(window.frame.width,URLImportLayout.width,accuracy:1)
     }
