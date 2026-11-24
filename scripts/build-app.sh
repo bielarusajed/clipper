@@ -45,5 +45,7 @@ mkdir -p "$ROOT/dist"
 python3 scripts/retire-build-apps.py --include-current
 mv "$APP" "$ROOT/dist/Clipper.app"
 rmdir "$STAGING"
-/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$ROOT/dist/Clipper.app"
+if [[ "${CLIPPER_REGISTER_APP:-1}" == 1 ]]; then
+  /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$ROOT/dist/Clipper.app"
+fi
 echo "$ROOT/dist/Clipper.app"
