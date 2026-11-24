@@ -38,8 +38,6 @@ struct URLImportView:View {
                         Text("End")
                         TextField("08:30",text:$importer.rangeEnd).accessibilityLabel("Rough range end")
                     }.font(.system(size:12)).textFieldStyle(.roundedBorder).monospacedDigit()
-                    Text("Adds 5 seconds on each side, plus nearby keyframes. Trim precisely after import. Some sites may still transfer most of the video.")
-                        .font(.system(size:11)).foregroundStyle(.secondary).fixedSize(horizontal:false,vertical:true)
                     if let duration=importer.media?.duration, duration.isFinite, duration > 0 {
                         Text("Video duration: \(TimeText.format(duration))").font(.system(size:11)).foregroundStyle(.secondary)
                     } else if importer.media != nil {
