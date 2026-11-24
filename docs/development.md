@@ -96,4 +96,4 @@ npm run lint     # oxlint
 npm run fmt      # oxfmt (fmt:check in CI)
 ```
 
-Cloudflare builds it from the `site` root directory with `npm run build` and serves `dist`. Screenshots in `site/src/assets/screens/` are captured from `dist/Clipper.app` over a blurred, theme-tuned frame of the demo clip so the window glass picks up its colour. Demo footage: NASA/JSC, 4K Earth Views (2021), public domain.
+Cloudflare Workers Builds deploys it with `site/wrangler.jsonc`: path `/site/`, build command `npm run build`, deploy command `npx wrangler deploy`, which uploads `dist/` as static assets. `site/.node-version` pins Node 24 for the build. Screenshots in `site/src/assets/screens/` are captured from `dist/Clipper.app` over a blurred, theme-tuned frame of the demo clip so the window glass picks up its colour. Demo footage: NASA/JSC, 4K Earth Views (2021), public domain.

@@ -1,0 +1,19 @@
+---
+import ButtonLink from '../components/ui/ButtonLink.astro';
+import Base from '../layouts/Base.astro';
+---
+
+<Base title="Page not found · Clipper" description="This page doesn’t exist on the Clipper website.">
+  <main class="mx-auto grid min-h-[80vh] max-w-[1240px] content-center gap-6 px-[clamp(20px,4vw,56px)]">
+    <p class="m-0 text-sm font-semibold text-sub">404</p>
+    <h1 class="m-0 max-w-[14ch] text-[clamp(44px,7vw,96px)] leading-[0.95] font-semibold tracking-[-0.04em]">
+      There’s no frame here.
+    </h1>
+    <p class="m-0 max-w-[40ch] text-lg text-sub">
+      The page you asked for doesn’t exist. The rest of the site is one page away.
+    </p>
+    <div>
+      <ButtonLink href="/">Go to the Clipper home page</ButtonLink>
+    </div>
+  </main>
+</Base>

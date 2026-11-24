@@ -1,0 +1,11 @@
+// Cloudflare Workers static-assets deployment for the landing page.
+// Build: `npm run build` (writes dist/); deploy: `npx wrangler deploy`.
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "clipper",
+  "compatibility_date": "2026-11-01",
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "404-page",
+  },
+}
