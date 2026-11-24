@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.1 · 24 November 2026
+
+- Fix low-contrast inspector controls on glass. Speed, Resolution, Audio and Subtitle track pickers and the subtitle buttons now use neutral native styling instead of blue text on a faint blue bezel, and the selected Framing preset uses a neutral highlight. Blue remains for primary actions, the codec selection and the quality slider.
+
 ## 0.6.0 · 18 November 2026
 
 - Add per-clip speed presets from 0.25× to 4× for playback, previews and exports, with pitch-preserving audio and undo/redo. Show output duration while keeping trim points and the timeline in source time.
