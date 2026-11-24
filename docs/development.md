@@ -62,7 +62,9 @@ For substantive feature work, consult Claude on planning, questions and code rev
 1. Update `CFBundleShortVersionString` and increment `CFBundleVersion` in `assets/Info.plist`. Record user-visible changes in `CHANGELOG.md`.
 2. Run the integrated suite, check `docs/validation.md`, and complete any relevant manual checks. Check shell syntax, plist validity and `git diff --check`.
 3. Commit the release changes. Packaging requires a clean working tree so its source archive matches the app.
-4. Run `bash scripts/package-release.sh`.
+4. Push a tag matching the app version, such as `v0.6.1`, on the release commit. The [Build macOS release workflow](../.github/workflows/release-macos.yml) packages Clipper on an Apple Silicon runner with Xcode 27.2 and publishes the verified files to GitHub Releases.
+
+To build without publishing, run **Build macOS release** from the Actions tab and download the `Clipper-macOS` artifact, or run `bash scripts/package-release.sh` locally.
 
 The packager reads the version from the plist and creates:
 
