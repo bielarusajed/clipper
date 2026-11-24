@@ -1,0 +1,67 @@
+---
+// The page as a source video: a ruler down the left edge with a playhead at the viewport
+// centre. Its timecode, and each Range bracket's in/out, come from scroll position.
+interface Props {
+  duration: number;
+}
+const { duration } = Astro.props;
+---
+
+<div
+  class="rail fixed inset-y-0 left-0 z-10 w-9 border-r border-faint bg-bg ruler md:w-19"
+  aria-hidden="true"
+  data-duration={duration}
+>
+  <div class="absolute top-1/2 right-[-1px] left-0 h-0.5 bg-accent after:absolute after:-top-[5px] after:-right-[7px] after:border-[6px] after:border-l-[7px] after:border-transparent after:border-l-accent">
+    <span class="absolute -top-5.5 left-1.5 hidden bg-bg px-0.5 text-[11px] font-semibold text-accent md:block">
+      00:00:00.000
+    </span>
+  </div>
+</div>
+
+<script>
+  import { timecode } from '../lib/timecode';
+
+  const rail = document.querySelector<HTMLElement>('.rail');
+  if (rail) {
+    const label = rail.querySelector('span');
+    const duration = Number(rail.dataset['duration']);
+    const at = (y: number) => timecode((y / Math.max(1, document.documentElement.scrollHeight)) * duration);
+
+    const brackets = () => {
+      for (const b of document.querySelectorAll<HTMLElement>('[data-range]')) {
+        const section = b.closest('section');
+        if (!section) continue;
+        const top = section.getBoundingClientRect().top + scrollY;
+        const [start, end] = b.children;
+        if (start) start.textContent = at(top);
+        if (end) end.textContent = at(top + section.offsetHeight);
+      }
+    };
+    const tick = () => {
+      if (label) label.textContent = at(scrollY + innerHeight / 2);
+      rail.style.setProperty('--off', `${-scrollY * 0.5}px`);
+    };
+
+    let pending = false;
+    addEventListener(
+      'scroll',
+      () => {
+        if (pending) return;
+        pending = true;
+        requestAnimationFrame(() => {
+          pending = false;
+          tick();
+        });
+      },
+      { passive: true },
+    );
+    addEventListener('resize', () => {
+      brackets();
+      tick();
+    });
+    addEventListener('load', brackets);
+    brackets();
+    tick();
+  }
+</script>
