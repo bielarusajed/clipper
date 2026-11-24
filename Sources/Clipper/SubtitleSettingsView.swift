@@ -26,7 +26,8 @@ struct SubtitleSettingsView:View {
                         if subtitles.tracks.count>1 {
                             Picker("Subtitle track",selection:$subtitles.track) {
                                 ForEach(subtitles.tracks) { Text($0.label).tag($0.id) }
-                            }.controlSize(.small).c1NeutralControl()
+                            }.controlSize(.small).c1NeutralControl().frame(minWidth:0,maxWidth:.infinity,alignment:.leading)
+                                .help(subtitles.tracks.first { $0.id == subtitles.track }?.label ?? "")
                         } else { Text(subtitles.tracks[0].label).lineLimit(2).foregroundStyle(C1.secondary) }
                     } else {
                         HStack(spacing:5) {

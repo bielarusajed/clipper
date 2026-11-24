@@ -19,6 +19,15 @@ extension View {
     /// blue text on a faint blue glass bezel. Keep them neutral; blue marks primary
     /// actions and filled selections only.
     func c1NeutralControl()->some View { tint(nil) }
+
+    /// Hugs the popup to its natural width while it fits; otherwise caps it at
+    /// `maxWidth` so the title truncates instead of overflowing its row.
+    func c1FittingPopUp(maxWidth:CGFloat)->some View {
+        ViewThatFits(in:.horizontal) {
+            fixedSize()
+            frame(minWidth:0,maxWidth:maxWidth)
+        }.frame(maxWidth:maxWidth,alignment:.trailing)
+    }
 }
 
 struct C1Group<Content:View>:View {

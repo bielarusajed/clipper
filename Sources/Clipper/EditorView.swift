@@ -247,7 +247,7 @@ struct EditorView:View {
                     Spacer(minLength:4)
                     Picker("Resolution",selection:setting(\.resolution,"Resolution")) {
                         ForEach(Resolution.allCases) { Text($0.rawValue).tag($0) }
-                    }.labelsHidden().fixedSize().c1NeutralControl().frame(maxWidth:154,alignment:.trailing)
+                    }.labelsHidden().c1NeutralControl().c1FittingPopUp(maxWidth:154)
                 }.font(.system(size:12)).controlSize(.small).padding(.horizontal,10).frame(height:36)
             }
         }
@@ -289,11 +289,12 @@ struct EditorView:View {
             C1Group {
                 if details.audioLabels.count > 1 {
                     HStack {
-                        Text("Track")
+                        Text("Track").fixedSize()
                         Spacer(minLength:4)
                         Picker("Audio track",selection:setting(\.audioTrack,"Audio Track")) {
                             ForEach(details.audioLabels.indices,id:\.self) { Text(details.audioLabels[$0]).tag($0) }
-                        }.labelsHidden().fixedSize().c1NeutralControl().frame(maxWidth:170,alignment:.trailing).disabled(playback.seeking)
+                        }.labelsHidden().c1NeutralControl().c1FittingPopUp(maxWidth:190).disabled(playback.seeking)
+                            .help(details.audioLabels.indices.contains(editor.edit.audioTrack) ? details.audioLabels[editor.edit.audioTrack] : "")
                     }.font(.system(size:12)).controlSize(.small).padding(.horizontal,10).frame(height:35)
                     rowDivider
                 }
