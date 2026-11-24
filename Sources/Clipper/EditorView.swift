@@ -127,7 +127,7 @@ struct EditorView:View {
                                     Spacer(minLength:4)
                                     Picker("Clip speed",selection:setting(\.speed,"Speed")) {
                                         ForEach(ClipSpeed.allCases) { Text($0 == .normal ? "1× (Normal)" : $0.label).tag($0) }
-                                    }.labelsHidden().fixedSize()
+                                    }.labelsHidden().fixedSize().c1NeutralControl()
                                         .help("Change playback and export speed. Audio keeps its pitch; Start and End use source time.")
                                 }.font(.system(size:12)).controlSize(.small).padding(.horizontal,10).frame(height:36)
                                 rowDivider
@@ -225,9 +225,9 @@ struct EditorView:View {
                                 Text(preset.rawValue).font(.system(size:9))
                             }
                             .frame(maxWidth:.infinity).frame(height:47)
-                            .foregroundStyle(selected ? C1.blue : C1.secondary)
-                            .background(selected ? C1.blue.opacity(0.09) : .clear,in:RoundedRectangle(cornerRadius:7))
-                            .overlay(RoundedRectangle(cornerRadius:7).stroke(selected ? C1.blue.opacity(0.18) : .clear,lineWidth:1))
+                            .foregroundStyle(selected ? C1.ink : C1.secondary)
+                            .background(selected ? Color.primary.opacity(0.12) : .clear,in:RoundedRectangle(cornerRadius:7))
+                            .overlay(RoundedRectangle(cornerRadius:7).stroke(selected ? Color.primary.opacity(0.16) : .clear,lineWidth:1))
                             .contentShape(Rectangle())
                         }.buttonStyle(.plain).help("Crop to \(preset.rawValue)").accessibilityLabel("Crop \(preset.rawValue)")
                             .accessibilityAddTraits(selected ? .isSelected : [])
@@ -247,7 +247,7 @@ struct EditorView:View {
                     Spacer(minLength:4)
                     Picker("Resolution",selection:setting(\.resolution,"Resolution")) {
                         ForEach(Resolution.allCases) { Text($0.rawValue).tag($0) }
-                    }.labelsHidden().fixedSize().frame(maxWidth:154,alignment:.trailing)
+                    }.labelsHidden().fixedSize().c1NeutralControl().frame(maxWidth:154,alignment:.trailing)
                 }.font(.system(size:12)).controlSize(.small).padding(.horizontal,10).frame(height:36)
             }
         }
@@ -293,7 +293,7 @@ struct EditorView:View {
                         Spacer(minLength:4)
                         Picker("Audio track",selection:setting(\.audioTrack,"Audio Track")) {
                             ForEach(details.audioLabels.indices,id:\.self) { Text(details.audioLabels[$0]).tag($0) }
-                        }.labelsHidden().fixedSize().frame(maxWidth:170,alignment:.trailing).disabled(playback.seeking)
+                        }.labelsHidden().fixedSize().c1NeutralControl().frame(maxWidth:170,alignment:.trailing).disabled(playback.seeking)
                     }.font(.system(size:12)).controlSize(.small).padding(.horizontal,10).frame(height:35)
                     rowDivider
                 }

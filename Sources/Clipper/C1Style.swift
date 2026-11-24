@@ -14,6 +14,13 @@ enum C1 {
     static let playhead = NSColor.controlAccentColor
 }
 
+extension View {
+    /// The window-wide blue tint turns native popups and bordered buttons into dark
+    /// blue text on a faint blue glass bezel. Keep them neutral; blue marks primary
+    /// actions and filled selections only.
+    func c1NeutralControl()->some View { tint(nil) }
+}
+
 struct C1Group<Content:View>:View {
     @ViewBuilder var content:Content
     var body:some View { VStack(spacing:0) { content } }

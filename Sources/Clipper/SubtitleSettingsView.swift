@@ -26,7 +26,7 @@ struct SubtitleSettingsView:View {
                         if subtitles.tracks.count>1 {
                             Picker("Subtitle track",selection:$subtitles.track) {
                                 ForEach(subtitles.tracks) { Text($0.label).tag($0.id) }
-                            }.controlSize(.small)
+                            }.controlSize(.small).c1NeutralControl()
                         } else { Text(subtitles.tracks[0].label).lineLimit(2).foregroundStyle(C1.secondary) }
                     } else {
                         HStack(spacing:5) {
@@ -35,7 +35,7 @@ struct SubtitleSettingsView:View {
                                 Spacer(minLength:0)
                                 Button { subtitles.external=nil; subtitles.prepare() } label: { Image(systemName:"xmark.circle.fill") }.buttonStyle(.plain).accessibilityLabel("Clear subtitle file")
                             } else { Text("SRT, WebVTT, ASS or SSA").foregroundStyle(C1.muted); Spacer(minLength:0) }
-                            Button(subtitles.external == nil ? "Choose…" : "Change…") { if let url=subtitles.chooseFile() { editor.importSubtitles(url) } }.controlSize(.small)
+                            Button(subtitles.external == nil ? "Choose…" : "Change…") { if let url=subtitles.chooseFile() { editor.importSubtitles(url) } }.controlSize(.small).c1NeutralControl()
                         }
                     }
                     if subtitles.scanning || subtitles.preparing { HStack { ProgressView().controlSize(.mini); Text("Preparing subtitles…") } }
@@ -43,7 +43,7 @@ struct SubtitleSettingsView:View {
                     if subtitles.unsupported>0 { Text("\(subtitles.unsupported) unsupported container track(s). Bitmap subtitles are not supported.").foregroundStyle(C1.muted) }
                     if subtitles.enabled && details.hdr && !editor.edit.convertToSDR {
                         Text("Burned-in subtitles need Convert to SDR for HDR videos.").fixedSize(horizontal:false,vertical:true)
-                        Button("Convert to SDR") { editor.setConvertToSDR(true) }.controlSize(.small)
+                        Button("Convert to SDR") { editor.setConvertToSDR(true) }.controlSize(.small).c1NeutralControl()
                     }
                     if subtitles.enabled,subtitles.render != nil {
                         Text(subtitles.styled && !subtitles.overrideStyle ? "Authored style · source coordinates" : "Common style · output coordinates").foregroundStyle(C1.muted)
