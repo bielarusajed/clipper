@@ -1,0 +1,44 @@
+---
+// A feature section bracketed like a marked range on a timeline. The in/out timecodes are
+// filled in on the client from the section's position in the page (see Rail.astro).
+import { cn } from 'cn';
+
+interface Props {
+  id?: string;
+  wide?: boolean;
+}
+const { id, wide = false } = Astro.props;
+---
+
+<section
+  {id}
+  class="grid items-start gap-[clamp(20px,4vw,56px)] py-12 md:grid-cols-[150px_minmax(0,1fr)_minmax(0,1fr)] md:py-18"
+>
+  <div
+    data-range
+    aria-hidden="true"
+    class={cn(
+      'relative flex gap-4 border-l-4 border-amber py-1.5 pl-3 text-[13px] font-semibold',
+      'md:sticky md:top-[30vh] md:h-[min(40vh,320px)] md:flex-col md:justify-between md:py-0',
+      'md:before:absolute md:before:top-0 md:before:-left-1 md:before:h-1 md:before:w-6 md:before:bg-amber',
+      'md:after:absolute md:after:bottom-0 md:after:-left-1 md:after:h-1 md:after:w-6 md:after:bg-amber',
+    )}
+  >
+    <b>00:00:00.000</b>
+    <span class="font-medium text-sub">00:00:00.000</span>
+  </div>
+  <div
+    class={cn(
+      '[&_h2]:mb-4.5 [&_h2]:text-[clamp(32px,3.6vw,52px)] [&_h2]:leading-none [&_h2]:font-semibold [&_h2]:tracking-[-0.03em]',
+      '[&_p]:mb-3.5 [&_p]:max-w-[44ch] [&_p]:text-sub [&_p_b]:font-semibold [&_p_b]:text-ink',
+      wide && 'md:col-span-2',
+    )}
+  >
+    <slot name="copy" />
+  </div>
+  {!wide && (
+    <div class="overflow-hidden rounded-[14px] border border-faint bg-card">
+      <slot name="viz" />
+    </div>
+  )}
+</section>

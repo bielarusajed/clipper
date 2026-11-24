@@ -4,6 +4,8 @@
 
 A native Mac app for cutting a precise clip. Drop a video, mark its start and end, adjust the framing, and export an MP4.
 
+Website: [clipper.bielarusajed.gay](https://clipper.bielarusajed.gay)
+
 Clipper opens MP4, MOV, MKV, WebM and AVI without preparing a proxy. The zoomable filmstrip, frame stepping and editable timestamps use actual decoded frames. Crop presets, downscaling, a quality slider and hardware H.264/H.265 encoding cover the export settings.
 
 ## Run
@@ -25,6 +27,7 @@ The editor also supports undo/redo, selection looping, cut audition, an optional
 - [Release notes](CHANGELOG.md)
 - [Validation and known limits](docs/validation.md)
 - [Third-party notices](docs/third-party-notices.txt)
+- [Website source](site/) (Astro; see the development guide)
 
 ## Build
 
@@ -37,3 +40,7 @@ bash scripts/build-app.sh
 The first build downloads and compiles the media dependencies. The result is `dist/Clipper.app`. See the development guide for prerequisites and tests.
 
 From a clean commit, `bash scripts/package-release.sh` creates versioned app and source ZIPs plus SHA-256 checksums in `dist/`. Share both ZIPs together so recipients have the matching dependency sources and build recipes.
+
+## License
+
+Clipper is free software under the [GNU General Public License v3.0 or later](LICENSE). Bundled third-party components keep their own licenses; see the [third-party notices](docs/third-party-notices.txt).

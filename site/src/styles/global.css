@@ -1,0 +1,108 @@
+@import 'tailwindcss';
+@import '@fontsource-variable/familjen-grotesk';
+
+/* Theme: light by default; dark from the system setting unless the visitor picked light,
+   or whenever the visitor picked dark (html[data-theme]). Colours are CSS variables so
+   every utility follows the active theme without dark: variants. */
+:root {
+  color-scheme: light;
+  --bg: #eef1f5;
+  --ink: #0e1a2b;
+  --sub: #4b5869;
+  --faint: #c9d1dc;
+  --card: #ffffff;
+  --amber: #f2a20c;
+  --accent: #1754a6;
+  --link: #1754a6;
+  --btn: #0e1a2b;
+  --btn-ink: #ffffff;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+    --bg: #0f1623;
+    --ink: #e9eef5;
+    --sub: #9aa6b6;
+    --faint: #2a3446;
+    --card: #172131;
+    --accent: #6ea3ef;
+    --link: #8db7f3;
+    --btn: #e9eef5;
+    --btn-ink: #0f1623;
+  }
+}
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #0f1623;
+  --ink: #e9eef5;
+  --sub: #9aa6b6;
+  --faint: #2a3446;
+  --card: #172131;
+  --accent: #6ea3ef;
+  --link: #8db7f3;
+  --btn: #e9eef5;
+  --btn-ink: #0f1623;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-ink: var(--ink);
+  --color-sub: var(--sub);
+  --color-faint: var(--faint);
+  --color-card: var(--card);
+  --color-amber: var(--amber);
+  --color-accent: var(--accent);
+  --color-link: var(--link);
+  --color-btn: var(--btn);
+  --color-btn-ink: var(--btn-ink);
+  --font-sans: 'Familjen Grotesk Variable', system-ui, sans-serif;
+}
+
+/* `dark:` follows the same rule as the tokens above. */
+@custom-variant dark {
+  @media (prefers-color-scheme: dark) {
+    &:where(:root:not([data-theme='light']) *) {
+      @slot;
+    }
+  }
+  &:where([data-theme='dark'], [data-theme='dark'] *) {
+    @slot;
+  }
+}
+
+/* The ruler on the left edge: minor ticks every 12px, major every 60px. */
+@utility ruler {
+  background-image:
+    repeating-linear-gradient(to bottom, var(--faint) 0 1px, transparent 1px 12px),
+    repeating-linear-gradient(to bottom, var(--sub) 0 1px, transparent 1px 60px);
+  background-size:
+    14px 100%,
+    26px 100%;
+  background-repeat: repeat-y;
+  background-position:
+    right 0 top var(--off, 0px),
+    right 0 top var(--off, 0px);
+  @media (width < 52rem) {
+    background-size:
+      8px 100%,
+      16px 100%;
+  }
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+    @media (prefers-reduced-motion: reduce) {
+      scroll-behavior: auto;
+    }
+  }
+  body {
+    @apply bg-bg font-sans text-[18px] leading-[1.55] text-ink tabular-nums antialiased;
+  }
+  a {
+    @apply text-link;
+  }
+  :focus-visible {
+    @apply rounded-sm outline-3 outline-offset-3 outline-accent;
+  }
+}

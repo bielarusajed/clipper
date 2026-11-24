@@ -1,0 +1,11 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "printWidth": 120,
+  "singleQuote": true,
+  "astro": true,
+  "sortTailwindcss": {
+    "stylesheet": "./src/styles/global.css",
+    "functions": ["cn"]
+  },
+  "ignorePatterns": ["dist", ".astro", "package-lock.json"]
+}

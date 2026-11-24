@@ -1,0 +1,17 @@
+---
+import { cn } from 'cn';
+
+interface Props {
+  class?: string;
+}
+const { class: className } = Astro.props;
+---
+
+<kbd
+  class={cn(
+    'inline-grid h-7.5 min-w-7.5 place-items-center rounded-[7px] border border-b-3 border-faint bg-card px-2 font-sans text-sm leading-none font-semibold text-ink',
+    className,
+  )}
+>
+  <slot />
+</kbd>

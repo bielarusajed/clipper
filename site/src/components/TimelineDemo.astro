@@ -1,0 +1,138 @@
+---
+// A small working copy of Clipper's timeline: real frames from the demo clip, amber in/out
+// handles that snap to source frames, and Start/End readouts like the inspector's.
+import type { ImageMetadata } from 'astro';
+import { Image } from 'astro:assets';
+
+interface Props {
+  frames: ImageMetadata[];
+  duration: number;
+  fps: number;
+}
+const { frames, duration, fps } = Astro.props;
+const field = 'rounded-md border border-l-3 border-faint border-l-amber px-3 py-1.5 text-lg font-semibold text-ink';
+const handle =
+  'absolute -inset-y-[3px] grid w-3.5 cursor-ew-resize place-items-center bg-amber after:h-2/5 after:w-0.5 after:rounded-full after:bg-black/45';
+---
+
+<div class="timeline-demo px-5.5 pt-5 pb-4.5" data-duration={duration} data-fps={fps}>
+  <div class="mb-4 flex flex-wrap items-center gap-x-4.5 gap-y-2.5 text-sm text-sub">
+    <label class="flex items-center gap-2.5">
+      Start{' '}
+      <output data-out="in" class={field}>
+        00:00:00.000
+      </output>
+    </label>
+    <label class="flex items-center gap-2.5">
+      End{' '}
+      <output data-out="out" class={field}>
+        00:00:00.000
+      </output>
+    </label>
+    <span class="ml-auto">
+      <output data-out="len" class="font-semibold text-ink">
+        0.000
+      </output>{' '}
+      s
+    </span>
+  </div>
+  <div class="strip relative flex touch-none gap-px rounded-md bg-black select-none">
+    {frames.map((f) => (
+      <Image
+        src={f}
+        alt=""
+        widths={[160, 320]}
+        sizes="160px"
+        loading="lazy"
+        class="h-18 min-w-0 flex-1 object-cover first:rounded-l-md last:rounded-r-md"
+      />
+    ))}
+    <div data-shade class="pointer-events-none absolute inset-y-0 left-0 bg-black/55"></div>
+    <div data-shade class="pointer-events-none absolute inset-y-0 right-0 bg-black/55"></div>
+    <div data-sel class="pointer-events-none absolute inset-y-0 border-y-3 border-amber">
+      <div
+        data-h="in"
+        role="slider"
+        tabindex="0"
+        aria-label="First included frame"
+        class:list={[handle, 'pointer-events-auto -left-3.5 rounded-l-md']}
+      ></div>
+      <div
+        data-h="out"
+        role="slider"
+        tabindex="0"
+        aria-label="Last included frame"
+        class:list={[handle, 'pointer-events-auto -right-3.5 rounded-r-md']}
+      ></div>
+    </div>
+  </div>
+  <p class="mt-3.5 mb-0 text-sm text-sub">
+    Drag the amber edges, or focus one and use the arrow keys to step a frame. Shift steps a second.
+  </p>
+</div>
+
+<script>
+  import { timecode } from '../lib/timecode';
+
+  type Edge = 'in' | 'out';
+
+  for (const demo of document.querySelectorAll<HTMLElement>('.timeline-demo')) {
+    const duration = Number(demo.dataset['duration']);
+    const fps = Number(demo.dataset['fps']);
+    const strip = demo.querySelector<HTMLElement>('.strip');
+    const sel = demo.querySelector<HTMLElement>('[data-sel]');
+    const [shadeL, shadeR] = demo.querySelectorAll<HTMLElement>('[data-shade]');
+    const handles = [...demo.querySelectorAll<HTMLElement>('[data-h]')];
+    const output = (k: string) => demo.querySelector<HTMLOutputElement>(`[data-out="${k}"]`);
+    if (!strip || !sel || !shadeL || !shadeR) continue;
+
+    const frame = 1 / fps;
+    const snap = (t: number) => Math.round(t * fps) / fps;
+    const clip = { in: snap(duration * 0.38), out: snap(duration * 0.61) };
+
+    const render = () => {
+      const a = (clip.in / duration) * 100;
+      const b = ((clip.out + frame) / duration) * 100;
+      Object.assign(sel.style, { left: `${a}%`, width: `${b - a}%` });
+      shadeL.style.width = `${a}%`;
+      shadeR.style.width = `${100 - b}%`;
+      output('in')!.textContent = timecode(clip.in);
+      output('out')!.textContent = timecode(clip.out);
+      output('len')!.textContent = (clip.out - clip.in + frame).toFixed(3);
+      for (const h of handles) h.setAttribute('aria-valuetext', timecode(clip[h.dataset['h'] as Edge]));
+    };
+    const set = (edge: Edge, t: number) => {
+      const v = snap(Math.max(0, Math.min(duration - frame, t)));
+      if (edge === 'in') clip.in = Math.min(v, clip.out);
+      else clip.out = Math.max(v, clip.in);
+      render();
+    };
+
+    strip.addEventListener('pointerdown', (e) => {
+      const edge = (e.target as HTMLElement).dataset['h'] as Edge | undefined;
+      if (!edge) return;
+      e.preventDefault();
+      const move = (ev: PointerEvent) => {
+        const r = strip.getBoundingClientRect();
+        set(edge, ((ev.clientX - r.left) / r.width) * duration);
+      };
+      const up = () => {
+        removeEventListener('pointermove', move);
+        removeEventListener('pointerup', up);
+      };
+      addEventListener('pointermove', move);
+      addEventListener('pointerup', up);
+    });
+    for (const h of handles) {
+      h.addEventListener('keydown', (e) => {
+        const edge = h.dataset['h'] as Edge;
+        const step = (e.shiftKey ? Math.round(fps) : 1) * frame;
+        if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') set(edge, clip[edge] - step);
+        else if (e.key === 'ArrowRight' || e.key === 'ArrowUp') set(edge, clip[edge] + step);
+        else return;
+        e.preventDefault();
+      });
+    }
+    render();
+  }
+</script>

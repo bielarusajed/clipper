@@ -1,0 +1,39 @@
+---
+// The opening section: headline, download, and the app captured over a blurred frame of the
+// demo clip so its glass shows the colour behind it (see Screenshot.astro).
+import editorDark from '../assets/screens/editor-dark.png';
+import editorLight from '../assets/screens/editor-light.png';
+import Screenshot from './Screenshot.astro';
+import ButtonLink from './ui/ButtonLink.astro';
+
+interface Props {
+  version: string;
+  downloadUrl: string;
+}
+const { version, downloadUrl } = Astro.props;
+---
+
+<section class="mx-auto max-w-[1240px] px-[clamp(20px,4vw,56px)] pt-[clamp(40px,8vh,100px)] pb-10">
+  <div class="grid gap-7">
+    <h1 class="m-0 max-w-[13ch] text-[clamp(52px,9.4vw,138px)] leading-[0.9] font-semibold tracking-[-0.045em]">
+      Cut on the frame you meant.
+    </h1>
+    <p class="m-0 max-w-[36ch] text-[clamp(19px,1.6vw,22px)] text-sub">
+      Clipper is a small Mac app for taking one precise clip out of a video. Mark the first and last frame, frame it for
+      where it’s going, export an MP4.
+    </p>
+    <div class="flex flex-wrap items-center gap-x-6 gap-y-4.5">
+      <ButtonLink href={downloadUrl}>Download Clipper {version}</ButtonLink>
+      <small class="max-w-[32ch] text-sm leading-snug text-sub">
+        Free and open source. For Apple silicon Macs on macOS 14 or newer.
+      </small>
+    </div>
+  </div>
+  <Screenshot
+    class="mt-12"
+    light={editorLight}
+    dark={editorDark}
+    eager
+    alt="The Clipper window: an inspector with Start, End, Framing, Video and Audio settings beside the video, and a filmstrip timeline with the selection marked in amber."
+  />
+</section>

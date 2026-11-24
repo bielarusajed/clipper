@@ -82,3 +82,18 @@ Current builds are ad-hoc signed and target arm64/macOS 14+. Developer ID signin
 ## Historical feature work
 
 The seven independent feature branches were merged for 0.5.0. Completed work orders, schedules, per-branch handoffs and review-only packagers were removed from main. Their last combined snapshot is available with `git show e9d2c5d:docs/feature-work/README.md`, and the rest of that directory at the same commit. Worktrees and branches are retained for review history. Prototype history and the current UI constraints are recorded in [architecture.md](architecture.md).
+
+## Website
+
+The landing page at https://clipper.bielarusajed.gay lives in `site/`: Astro with TypeScript and Tailwind CSS. It needs Node 22 or newer.
+
+```sh
+cd site
+npm install
+npm run dev      # local server with live reload
+npm run build    # type check, then static build into site/dist
+npm run lint     # oxlint
+npm run fmt      # oxfmt (fmt:check in CI)
+```
+
+Cloudflare builds it from the `site` root directory with `npm run build` and serves `dist`. Screenshots in `site/src/assets/screens/` are captured from `dist/Clipper.app` over a blurred, theme-tuned frame of the demo clip so the window glass picks up its colour. Demo footage: NASA/JSC, 4K Earth Views (2021), public domain.
