@@ -43,10 +43,16 @@ struct URLImportView:View {
                     } else if importer.media != nil {
                         Text("Source duration unavailable. Enter a finite end time.").font(.system(size:11)).foregroundStyle(.secondary)
                     }
-                } else if let time=importer.media?.timestampHint {
-                    Button("Link starts at \(TimeText.format(time)). Use a 30-second range") { importer.useTimestampHint() }
-                        .buttonStyle(.link).font(.system(size:11))
                 }
+                HStack(spacing:8) {
+                    Toggle("Download subtitles",isOn:$importer.subtitlesEnabled).toggleStyle(.checkbox)
+                        .help("Embed every available subtitle language in the imported video. Choose a track under Subtitles in the editor.")
+                    if let media=importer.media {
+                        let count=media.subtitleOptions().count
+                        Text(count == 0 ? "None available" : count == 1 ? "1 language available" : "\(count) languages available")
+                            .foregroundStyle(.secondary)
+                    }
+                }.font(.system(size:12))
             }.disabled(importer.downloadRequested)
             if importer.formatsVisible {
                 HStack(spacing:12) {
@@ -77,6 +83,7 @@ struct URLImportView:View {
         .onExitCommand(perform:close)
         .onAppear { urlFocused=true }
         .onChange(of:importer.urlText) { _,_ in importer.urlChanged() }
+        .onChange(of:importer.rangeEnabled) { _,_ in importer.rangeToggled() }
     }
 
     private var buttonLabel:String {

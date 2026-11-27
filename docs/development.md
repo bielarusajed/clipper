@@ -52,6 +52,7 @@ Network tests are opt-in:
 | `CLIPPER_NETWORK_TEST=1` | Real managed-tool URL import |
 | `CLIPPER_RANGE_NETWORK_TEST=1` | Real yt-dlp with loopback HTTP/range and TLS fixtures |
 | `CLIPPER_RANGE_PUBLIC_TEST=1` | Public HTTPS ranged download |
+| `CLIPPER_SUBTITLE_NETWORK_TEST=1` | YouTube ranged import with embedded subtitles |
 
 The range downloader tests expect standalone yt-dlp and Deno at `.build/range-tests/Tools/yt-dlp` and `deno`. The loopback certificate-rejection test only needs Python 3, openssl and the bundled FFmpeg. It does not modify system trust. Public-site tests depend on upstream availability.
 

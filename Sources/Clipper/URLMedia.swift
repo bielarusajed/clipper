@@ -9,6 +9,8 @@ struct URLMedia: Decodable {
     let isLive:Bool?
     let type:String?
     let startTime:Double?
+    let subtitles:URLSubtitleCatalog?
+    let automaticCaptions:URLSubtitleCatalog?
     var timestampHint:Double? {
         guard let time=startTime, time.isFinite, time > 0, time < ImportRange.maximumTime,
               duration == nil || time < duration! else { return nil }
@@ -16,9 +18,26 @@ struct URLMedia: Decodable {
     }
 
     enum CodingKeys:String,CodingKey {
-        case id,title,duration,formats
-        case startTime="start_time"
+        case id,title,duration,formats,subtitles
+        case startTime="start_time", automaticCaptions="automatic_captions"
         case liveStatus="live_status", isLive="is_live", type="_type"
+    }
+
+    /// Every authored track, then automatic captions in other languages. Machine translations are skipped:
+    /// sites that mark the speech-recognition source with "-orig" offer one per language, and fetching
+    /// them all is slow and rate-limited. The editor selects the first track, so preferred languages lead.
+    func subtitleOptions(preferredLanguages:[String]=Locale.preferredLanguages) -> [URLSubtitle] {
+        let manual=(subtitles?.languages ?? [:]).map { URLSubtitle(language:$0.key,name:$0.value,kind:.authored) }
+        let taken=Set(manual.map(\.language))
+        let automatic=(automaticCaptions?.languages ?? [:]).filter { !taken.contains($0.key) }
+        let hasOriginal=automatic.keys.contains { $0.hasSuffix("-orig") }
+        let generated=automatic.filter { !hasOriginal || $0.key.hasSuffix("-orig") }.map { URLSubtitle(language:$0.key,name:$0.value,kind:.automatic) }
+        func base(_ code:String)->String { code.split(separator:"-").first.map { $0.lowercased() } ?? "" }
+        let preferred=preferredLanguages.map(base)
+        func rank(_ s:URLSubtitle)->Int { preferred.firstIndex(of:base(s.language)) ?? preferred.count }
+        return (manual+generated).sorted {
+            (rank($0),$0.kind.rawValue,$0.name.localizedLowercase,$0.language) < (rank($1),$1.kind.rawValue,$1.name.localizedLowercase,$1.language)
+        }
     }
 
     var videos:[URLMediaFormat] { formats.reversed().filter { $0.selectable && $0.hasVideo } }
@@ -73,6 +92,58 @@ struct URLMedia: Decodable {
         let prefix=bounded.trimmingCharacters(in:CharacterSet(charactersIn:". "))
         return prefix.isEmpty ? "Imported video" : prefix
     }
+}
+
+/// A text subtitle language yt-dlp can fetch. Unreadable or unsafe entries are dropped rather than failing the lookup.
+struct URLSubtitleCatalog: Decodable {
+    static let formats:Set<String>=["ass","ssa","srt","vtt"]
+    let languages:[String:String]
+    private struct Entry:Decodable {
+        let ext:String?
+        let name:String?
+        init(from decoder:Decoder) throws {
+            let values=try? decoder.container(keyedBy:CodingKeys.self)
+            ext=try? values?.decode(String.self,forKey:.ext)
+            name=try? values?.decode(String.self,forKey:.name)
+        }
+        enum CodingKeys:String,CodingKey { case ext,name }
+    }
+    private struct Entries:Decodable {
+        let items:[Entry]
+        init(from decoder:Decoder) throws {
+            var values=try? decoder.unkeyedContainer(), items=[Entry]()
+            while let more=values, !more.isAtEnd, let entry=try? values?.decode(Entry.self) { items.append(entry) }
+            self.items=items
+        }
+    }
+    init(from decoder:Decoder) throws {
+        let raw=((try? decoder.singleValueContainer().decode([String:Entries].self)) ?? [:]).mapValues(\.items)
+        var result=[String:String]()
+        for (language,entries) in raw where URLSubtitle.safe(language) && entries.contains(where:{ Self.formats.contains($0.ext?.lowercased() ?? "") }) {
+            let name=entries.lazy.compactMap { $0.name?.trimmingCharacters(in:.whitespacesAndNewlines) }.first { !$0.isEmpty }
+            result[language]=String((name ?? language).prefix(80))
+        }
+        languages=result
+    }
+}
+
+struct URLSubtitle: Hashable, Identifiable, Sendable {
+    enum Kind:Int,Sendable { case authored, automatic }
+    let language:String
+    let name:String
+    let kind:Kind
+    var id:String { kind == .authored ? language : "auto:\(language)" }
+    var label:String {
+        switch kind {
+        case .authored: return name
+        case .automatic: return "\(name) (auto-generated)"
+        }
+    }
+    /// yt-dlp treats each --sub-langs entry as a regular expression, and a leading "-" as an exclusion.
+    static func safe(_ language:String)->Bool {
+        language.count <= 40 && language.range(of:"^[A-Za-z0-9_][A-Za-z0-9_.-]*$",options:.regularExpression) != nil
+    }
+    var pattern:String { NSRegularExpression.escapedPattern(for:language) }
 }
 
 struct URLMediaFormat: Decodable, Identifiable {

@@ -460,7 +460,7 @@ private actor ImportServiceSpy:URLImportServicing {
         if let duration { json["duration"]=duration }
         return try URLMedia.decode(JSONSerialization.data(withJSONObject:json))
     }
-    func download(url:URL,media:URLMedia,selector:String,excludeAudio:Bool,range:ImportRange?,tools:ImportTools,
+    func download(url:URL,media:URLMedia,selector:String,excludeAudio:Bool,range:ImportRange?,subtitles:[URLSubtitle],tools:ImportTools,
                   progress:@escaping @Sendable(ImportProgress)->Void) async throws -> TemporaryImport {
         downloadCount += 1; ranges.append(range); selectors.append(selector); excludedAudio.append(excludeAudio); downloadURLs.append(url)
         downloadedToolVersions.append(tools.version)

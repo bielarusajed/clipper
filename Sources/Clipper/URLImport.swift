@@ -4,7 +4,7 @@ protocol URLImportServicing:Sendable {
     func prepare(status:@escaping @Sendable(String)->Void) async throws -> ImportTools
     func refreshAfterFailure(status:@escaping @Sendable(String)->Void) async throws -> ImportTools?
     func inspect(url:URL,tools:ImportTools) async throws -> URLMedia
-    func download(url:URL,media:URLMedia,selector:String,excludeAudio:Bool,range:ImportRange?,tools:ImportTools,
+    func download(url:URL,media:URLMedia,selector:String,excludeAudio:Bool,range:ImportRange?,subtitles:[URLSubtitle],tools:ImportTools,
                   progress:@escaping @Sendable(ImportProgress)->Void) async throws -> TemporaryImport
 }
 
@@ -16,9 +16,9 @@ struct URLImportService:URLImportServicing {
         try await ManagedImportTools.shared.refreshAfterFailure(status:status)
     }
     func inspect(url:URL,tools:ImportTools) async throws -> URLMedia { try await URLMediaDownload.inspect(url:url,tools:tools) }
-    func download(url:URL,media:URLMedia,selector:String,excludeAudio:Bool,range:ImportRange?,tools:ImportTools,
+    func download(url:URL,media:URLMedia,selector:String,excludeAudio:Bool,range:ImportRange?,subtitles:[URLSubtitle],tools:ImportTools,
                   progress:@escaping @Sendable(ImportProgress)->Void) async throws -> TemporaryImport {
-        try await URLMediaDownload.download(url:url,media:media,selector:selector,excludeAudio:excludeAudio,range:range,tools:tools,progress:progress)
+        try await URLMediaDownload.download(url:url,media:media,selector:selector,excludeAudio:excludeAudio,range:range,subtitles:subtitles,tools:tools,progress:progress)
     }
 }
 
@@ -30,6 +30,12 @@ struct URLImportService:URLImportServicing {
     @Published var rangeEnabled=false
     @Published var rangeStart="0"
     @Published var rangeEnd=""
+    /// Fetch every available subtitle language with the video. Remembered between imports.
+    @Published var subtitlesEnabled:Bool {
+        didSet { defaults.set(subtitlesEnabled,forKey:Self.subtitlesKey) }
+    }
+    static let subtitlesKey="URLImportDownloadsSubtitles"
+    private let defaults:UserDefaults
     @Published private(set) var canRetryFull=false
     @Published private(set) var formatsVisible=false
     @Published private(set) var busy=false
@@ -48,11 +54,15 @@ struct URLImportService:URLImportServicing {
         let video:String
         let audio:String
         let range:ImportRange?
+        let subtitles:Bool
         let open:(TemporaryImport)->Void
     }
     private var pendingDownload:DownloadIntent?
 
-    init(service:any URLImportServicing=URLImportService()) { self.service=service }
+    init(service:any URLImportServicing=URLImportService(),defaults:UserDefaults = .standard) {
+        self.service=service; self.defaults=defaults
+        subtitlesEnabled=defaults.bool(forKey:Self.subtitlesKey)
+    }
     var includesAudio:Bool { media?.videos.first(where:{ $0.id == video })?.hasAudio == true }
     var excludesAudio:Bool { audio == "none" }
     var showsActivity:Bool { busy && (formatsVisible || downloadRequested || cancelling) }
@@ -97,6 +107,13 @@ struct URLImportService:URLImportServicing {
         if includesAudio && audio != "none" { audio="best" }
     }
 
+    /// A URL timestamp only prefills the range once the user asks for one; full import stays the default.
+    func rangeToggled() {
+        guard rangeEnabled, rangeStart == "0", rangeEnd.isEmpty, let time=media?.timestampHint else { return }
+        rangeStart=TimeText.format(time)
+        rangeEnd=TimeText.format(min(time+30,media?.duration ?? time+30))
+    }
+
     func prefetch() {
         urlChanged()
         guard !busy, media == nil else { return }
@@ -120,7 +137,7 @@ struct URLImportService:URLImportServicing {
             try range?.validate(duration:media?.duration)
         }
         catch { self.error=error.localizedDescription; return }
-        pendingDownload=DownloadIntent(video:formatsVisible ? video : "best",audio:formatsVisible ? audio : "best",range:range,open:open)
+        pendingDownload=DownloadIntent(video:formatsVisible ? video : "best",audio:formatsVisible ? audio : "best",range:range,subtitles:subtitlesEnabled,open:open)
         canRetryFull=false
         downloadRequested=true
         // If a paste already started a lookup, its task consumes this intent when it finishes.
@@ -171,6 +188,7 @@ struct URLImportService:URLImportServicing {
                     try Task.checkCancellation()
                     guard operation == token else { return }
                     media=info
+                    rangeToggled()
                 }
                 guard let intent=pendingDownload else { status=""; return }
                 try intent.range?.validate(duration:info.duration)
@@ -178,7 +196,8 @@ struct URLImportService:URLImportServicing {
                 status=intent.range == nil ? "Downloading…" : "Downloading section…"
                 transferStarted=true
                 let result=try await service.download(url:url,media:info,selector:selector,
-                    excludeAudio:intent.audio == "none",range:intent.range,tools:tools) { [weak self] update in
+                    excludeAudio:intent.audio == "none",range:intent.range,
+                    subtitles:intent.subtitles ? info.subtitleOptions() : [],tools:tools) { [weak self] update in
                         Task { @MainActor in
                             guard let self, self.operation == token, self.busy, !self.cancelling else { return }
                             self.status=update.label; self.progress=update.fraction
@@ -202,12 +221,6 @@ struct URLImportService:URLImportServicing {
         }
     }
 
-    func useTimestampHint() {
-        guard let time=media?.timestampHint else { return }
-        rangeStart=TimeText.format(time)
-        rangeEnd=TimeText.format(min(time+30,media?.duration ?? time+30))
-        rangeEnabled=true
-    }
     func retryFull(open:@escaping(TemporaryImport)->Void) {
         rangeEnabled=false
         download(open:open)
@@ -312,7 +325,7 @@ enum URLMediaDownload {
         return media
     }
 
-    static func download(url:URL,media:URLMedia,selector:String,excludeAudio:Bool=false,range:ImportRange?=nil,tools:ImportTools,
+    static func download(url:URL,media:URLMedia,selector:String,excludeAudio:Bool=false,range:ImportRange?=nil,subtitles:[URLSubtitle]=[],tools:ImportTools,
                          temporaryRoot:URL=TemporaryImport.root,
                          progress:@escaping @Sendable(ImportProgress)->Void) async throws -> TemporaryImport {
         let files=FileManager.default
@@ -325,6 +338,8 @@ enum URLMediaDownload {
             "--progress-template","postprocess:CLIPPER_POST:%(progress.status)s",
             "--print","after_move:CLIPPER_FILE:%(filepath)j","--",url.absoluteString]
         if range != nil { progress(ImportProgress(label:"Downloading section…",fraction:nil)) }
+        // Captions download alongside the media; a failed fetch only omits them.
+        async let fetchedSubtitles=ImportSubtitles.fetch(url:url,subtitles:subtitles,tools:tools,workspace:workspace)
         let output:Data
         do {
             output=try await ImportProcess().run(executable:tools.ytDLP,arguments:args,directory:workspace,
@@ -367,6 +382,21 @@ enum URLMediaDownload {
             _=try await ImportProcess().run(executable:tools.ffmpegDirectory.appendingPathComponent("ffmpeg"),
                 arguments:["-hide_banner","-loglevel","error","-nostdin","-n","-i",file.path,"-map","0:v:0","-c:v","copy","-an","-sn","-dn",silent.path])
             try files.removeItem(at:file); file=silent
+        }
+        let captions=await fetchedSubtitles
+        try Task.checkCancellation()
+        if !captions.isEmpty {
+            progress(ImportProgress(label:"Adding subtitles…",fraction:nil))
+            let probe=try await ImportProbe.read(file:file,tools:tools)
+            do {
+                if let muxed=try await ImportSubtitles.mux(file:file,subtitles:captions,
+                    shift:(probe.start ?? 0)-(timeline?.offset ?? 0),
+                    existingSubtitleStreams:probe.streams?.filter { $0.codec_type == "subtitle" }.count ?? 0,
+                    workspace:workspace,ffmpeg:tools.ffmpegDirectory.appendingPathComponent("ffmpeg")) {
+                    try files.removeItem(at:file); file=muxed
+                }
+            } catch is CancellationError { throw CancellationError() }
+            catch { try? files.removeItem(at:workspace.appendingPathComponent("subtitled.mkv")) } // Keep the video without them.
         }
         progress(ImportProgress(label:"Checking downloaded media…",fraction:nil))
         _=try await ImportProbe.read(file:file,tools:tools)

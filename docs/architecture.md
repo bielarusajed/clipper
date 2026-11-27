@@ -36,6 +36,8 @@ A five-second quality preview uses the export pipeline. AVPlayer displays that f
 
 `ImportRange.swift` represents the requested original-video range and verified time mapping. Ranged downloads retain timestamps, omit subtitle/data tracks, then stream-copy into a normalized local source. Display and typed times use the measured offset; source playback, frame selection and exports keep local time. Unverifiable mapping offers an explicit full-download retry.
 
+`ImportSubtitles.swift` fetches every available authored language and untranslated automatic captions in a separate, non-fatal yt-dlp run concurrent with the media download, then stream-copies them into a Matroska source with language/title tags so the container catalog lists them. Site subtitles count from the start of the original video: cue times move by the downloaded file's first timestamp minus any section offset, and cues that end before zero are removed in Swift, because FFmpeg would otherwise shift every stream to fit negative subtitle timestamps.
+
 The private FFmpeg build supports HTTPS through macOS SecureTransport. The dated patch in `patches/` turns peer certificate verification on by default, including nested requests and redirects. Remote range inputs use a protocol whitelist and a 30-second I/O timeout. Full tool/update behavior and input limits are in the [usage guide](guide.md).
 
 ## Native UI

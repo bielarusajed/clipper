@@ -102,7 +102,7 @@ AV1 playback on M1 uses software decoding. Very demanding sources can drop playb
 
 Dolby Vision dynamic-metadata preservation and unusual AVI timestamp layouts need broader real-world coverage. HDR transfer/primaries and explicit SDR conversion have synthetic test coverage. HDR subtitle burn-in requires SDR conversion; bitmap subtitles and WebVTT CSS/positioning are unsupported. Subtitle source/style changes are outside undo history.
 
-URL ranges depend on server/index behavior and may transfer most of the original. Ranged imports omit embedded subtitles and use millisecond container timestamps. Live streams, DRM, playlists, browser-cookie authentication and audio-only imports are unsupported. See the [usage guide](guide.md) for details.
+URL ranges depend on server/index behavior and may transfer most of the original. Ranged imports omit the source's embedded subtitles (subtitles fetched with Download subtitles are kept) and use millisecond container timestamps. Live streams, DRM, playlists, browser-cookie authentication and audio-only imports are unsupported. See the [usage guide](guide.md) for details.
 
 ## Release artifacts
 
