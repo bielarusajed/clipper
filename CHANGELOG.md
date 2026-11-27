@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.0 · 27 November 2026
+
+- Download subtitles with URL imports. Check Download subtitles in the import dialog (remembered between imports) to embed every subtitle language the site offers, plus auto-generated captions, in the imported video. They appear as container subtitle tracks in the editor, with your preferred languages first, including for rough-range imports. Machine-translated captions are skipped, and a failed caption download keeps the video without them.
+- A timestamp in the URL no longer offers a separate 30-second range link. Turning on Import a rough time range prefills the range from the timestamp instead.
+
 ## 0.6.2 · 24 November 2026
 
 - Truncate long inspector popup titles so they fit in the panel. Tooltips show the full titles.
